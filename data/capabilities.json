@@ -1,0 +1,328 @@
+{
+  "robots": [
+    {
+      "id": "go2_z1",
+      "name": "Unitree Go2 + Z1",
+      "type": "mobile_manipulator",
+      "capabilities": [
+        {
+          "name": "navigate",
+          "parameters": [
+            "location"
+          ],
+          "preconditions": [],
+          "effects": [
+            "robot_at(go2_z1, location)"
+          ]
+        },
+        {
+          "name": "pick",
+          "parameters": [
+            "object"
+          ],
+          "preconditions": [
+            "robot_near(go2_z1, object)"
+          ],
+          "effects": [
+            "holding(go2_z1, object)",
+            "not_object_at(object)"
+          ]
+        },
+        {
+          "name": "carry",
+          "parameters": [
+            "object",
+            "location"
+          ],
+          "preconditions": [
+            "holding(go2_z1, object)"
+          ],
+          "effects": [
+            "robot_at(go2_z1, location)",
+            "object_at(object, location)"
+          ]
+        },
+        {
+          "name": "place",
+          "parameters": [
+            "object",
+            "location"
+          ],
+          "preconditions": [
+            "holding(go2_z1, object)",
+            "robot_at(go2_z1, location)"
+          ],
+          "effects": [
+            "object_at(object, location)",
+            "not_holding(go2_z1, object)"
+          ]
+        },
+        {
+          "name": "deliver",
+          "parameters": [
+            "object",
+            "location"
+          ],
+          "preconditions": [
+            "holding(go2_z1, object)"
+          ],
+          "effects": [
+            "robot_at(go2_z1, location)",
+            "object_at(object, location)",
+            "not_holding(go2_z1, object)"
+          ]
+        },
+        {
+          "name": "open_drawer",
+          "parameters": [
+            "drawer"
+          ],
+          "preconditions": [
+            "drawer_closed(drawer)"
+          ],
+          "effects": [
+            "drawer_open(drawer)"
+          ]
+        },
+        {
+          "name": "close_drawer",
+          "parameters": [
+            "drawer"
+          ],
+          "preconditions": [
+            "drawer_open(drawer)"
+          ],
+          "effects": [
+            "drawer_closed(drawer)"
+          ]
+        },
+        {
+          "name": "pick_tray",
+          "parameters": [
+            "tray"
+          ],
+          "preconditions": [
+            "drawer_open(parts_drawer)",
+            "gear_tray_at(tray, parts_drawer)"
+          ],
+          "effects": [
+            "holding(go2_z1, tray)",
+            "not_gear_tray_at(tray)"
+          ]
+        },
+        {
+          "name": "place_tray",
+          "parameters": [
+            "tray",
+            "location"
+          ],
+          "preconditions": [
+            "holding(go2_z1, tray)"
+          ],
+          "effects": [
+            "tray_at(tray, location)",
+            "not_holding(go2_z1, tray)"
+          ]
+        },
+        {
+          "name": "pick_tool",
+          "parameters": [
+            "tool"
+          ],
+          "preconditions": [
+            "drawer_open(parts_drawer)",
+            "screwdriver_at(tool, parts_drawer)"
+          ],
+          "effects": [
+            "holding(go2_z1, tool)",
+            "not_screwdriver_at(tool)",
+            "not_tool_at(tool)"
+          ]
+        },
+        {
+          "name": "place_tool",
+          "parameters": [
+            "tool",
+            "location"
+          ],
+          "preconditions": [
+            "holding(go2_z1, tool)"
+          ],
+          "effects": [
+            "tool_at(tool, location)",
+            "screwdriver_at(tool, location)",
+            "not_holding(go2_z1, tool)"
+          ]
+        },
+        {
+          "name": "return_tool",
+          "parameters": [
+            "tool",
+            "location"
+          ],
+          "preconditions": [
+            "screw_fastened(gearbase)"
+          ],
+          "effects": [
+            "tool_at(tool, location)",
+            "screwdriver_at(tool, location)"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "franka",
+      "name": "Franka Emika Panda",
+      "type": "manipulator",
+      "capabilities": [
+        {
+          "name": "open_box",
+          "parameters": [
+            "box"
+          ],
+          "preconditions": [
+            "robot_at(franka, packing_table)",
+            "box_at(box, packing_table)",
+            "box_closed(box)"
+          ],
+          "effects": [
+            "box_open(box)"
+          ]
+        },
+        {
+          "name": "insert",
+          "parameters": [
+            "object",
+            "box"
+          ],
+          "preconditions": [
+            "robot_at(franka, packing_table)",
+            "box_open(box)",
+            "object_at(object, packing_table)"
+          ],
+          "effects": [
+            "object_in(object, box)",
+            "not_object_at(object)"
+          ]
+        },
+        {
+          "name": "close_box",
+          "parameters": [
+            "box"
+          ],
+          "preconditions": [
+            "robot_at(franka, packing_table)",
+            "box_open(box)",
+            "object_in(object, box)"
+          ],
+          "effects": [
+            "box_closed(box)",
+            "object_at(box, packing_table)",
+            "box_at(box, packing_table)"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "franka1",
+      "name": "Franka Panda 1",
+      "type": "manipulator",
+      "capabilities": [
+        {
+          "name": "hold_gearbase",
+          "parameters": [
+            "gearbase"
+          ],
+          "preconditions": [
+            "robot_at(franka1, workstation)",
+            "gearbase_ready(gearbase)"
+          ],
+          "effects": [
+            "holding(franka1, gearbase)"
+          ]
+        },
+        {
+          "name": "stabilize_gearbase",
+          "parameters": [
+            "gearbase"
+          ],
+          "preconditions": [
+            "holding(franka1, gearbase)"
+          ],
+          "effects": [
+            "gearbase_stable(gearbase)"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "franka2",
+      "name": "Franka Panda 2",
+      "type": "manipulator",
+      "capabilities": [
+        {
+          "name": "pick_gear",
+          "parameters": [
+            "gear"
+          ],
+          "preconditions": [
+            "robot_at(franka2, workstation)",
+            "tray_at(gear_tray, parts_zone)"
+          ],
+          "effects": [
+            "holding(franka2, gear)"
+          ]
+        },
+        {
+          "name": "mount_gear",
+          "parameters": [
+            "gear",
+            "shaft"
+          ],
+          "preconditions": [
+            "holding(franka2, gear)",
+            "gearbase_stable(gearbase)",
+            "shaft_ready(shaft)"
+          ],
+          "effects": [
+            "gear_mounted(gear, shaft)",
+            "not_holding(franka2, gear)"
+          ]
+        },
+        {
+          "name": "pick_tool",
+          "parameters": [
+            "tool"
+          ],
+          "preconditions": [
+            "robot_at(franka2, workstation)",
+            "tool_at(tool, tool_zone)"
+          ],
+          "effects": [
+            "holding(franka2, tool)",
+            "not_tool_at(tool)",
+            "not_screwdriver_at(tool)"
+          ]
+        },
+        {
+          "name": "fasten_screw",
+          "parameters": [
+            "gearbase",
+            "tool"
+          ],
+          "preconditions": [
+            "gear_mounted(gear, shaft)",
+            "gearbase_stable(gearbase)",
+            "holding(franka2, tool)"
+          ],
+          "effects": [
+            "screw_fastened(gearbase)",
+            "tool_at(tool, workstation)",
+            "screwdriver_at(tool, workstation)",
+            "not_holding(franka2, tool)"
+          ]
+        }
+      ]
+    }
+  ]
+}

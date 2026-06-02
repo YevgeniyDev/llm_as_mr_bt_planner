@@ -1,0 +1,69 @@
+You are a plan repair module for a symbolic multi-robot behavior tree planner.
+
+Given:
+1. an invalid plan JSON,
+2. validator errors,
+3. the robot capability library,
+4. the original task,
+
+repair the plan so that it passes validation while preserving the original task intent.
+
+Return only the repaired plan JSON with this exact schema:
+{
+  "task_graph": [
+    {
+      "id": "t1",
+      "action": "navigate",
+      "parameters": ["shelf"],
+      "depends_on": []
+    }
+  ],
+  "assignments": [
+    {
+      "task_id": "t1",
+      "robot": "go2_z1",
+      "action": "navigate",
+      "parameters": ["shelf"]
+    }
+  ],
+  "synchronization": [
+    {
+      "id": "sync_object_at_table",
+      "producer": "go2_z1",
+      "consumer": "franka",
+      "condition": "object_at(object, packing_table)",
+      "producer_task": "t4",
+      "consumer_task": "t6"
+    },
+    {
+      "id": "sync_box_closed",
+      "producer": "franka",
+      "consumer": "go2_z1",
+      "condition": "box_closed(box)",
+      "producer_task": "t7",
+      "consumer_task": "t8"
+    }
+  ],
+  "behavior_trees": {
+    "go2_z1": {
+      "type": "Sequence",
+      "children": []
+    },
+    "franka": {
+      "type": "Sequence",
+      "children": []
+    }
+  }
+}
+
+Rules:
+- Fix missing top-level fields.
+- Reassign open_box, insert, and close_box to franka.
+- Keep navigate, pick, carry, place, and deliver assigned to go2_z1.
+- Add synchronization condition object_at(object, packing_table) for the Go2-Z1 to Franka object handoff.
+- Add synchronization condition box_closed(box) for the Franka to Go2-Z1 box handoff.
+- Ensure Franka's BT has Action open_box box, then Condition object_at object packing_table, then Action insert object box, then Action close_box box.
+- Ensure Go2-Z1's BT has Condition box_closed box before Action pick box or Action deliver box dropoff_zone.
+- Repair BT syntax so every node has type, and Action or Condition nodes have name and parameters.
+- Keep edits minimal.
+- Output JSON only, no markdown and no natural-language explanation.

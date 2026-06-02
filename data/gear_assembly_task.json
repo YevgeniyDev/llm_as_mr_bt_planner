@@ -1,0 +1,35 @@
+{
+  "task_id": "gear_assembly",
+  "instruction": "Open the parts drawer, retrieve the gear tray and screwdriver, bring them to the workstation, mount the gear onto the shaft, fasten the gearbase screw, then return the screwdriver to storage.",
+  "initial_state": [
+    "drawer_closed(parts_drawer)",
+    "gear_tray_at(gear_tray, parts_drawer)",
+    "screwdriver_at(screwdriver, parts_drawer)",
+    "shaft_ready(shaft)",
+    "gearbase_ready(gearbase)",
+    "robot_at(go2_z1, start_zone)",
+    "robot_at(franka1, workstation)",
+    "robot_at(franka2, workstation)"
+  ],
+  "goal_state": [
+    "gear_mounted(gear, shaft)",
+    "screw_fastened(gearbase)",
+    "screwdriver_at(screwdriver, parts_drawer)",
+    "drawer_closed(parts_drawer)"
+  ],
+  "objects": [
+    "parts_drawer",
+    "gear_tray",
+    "screwdriver",
+    "gear",
+    "shaft",
+    "gearbase"
+  ],
+  "locations": [
+    "start_zone",
+    "parts_drawer",
+    "workstation",
+    "parts_zone",
+    "tool_zone"
+  ]
+}

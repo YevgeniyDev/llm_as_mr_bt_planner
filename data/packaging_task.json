@@ -1,0 +1,26 @@
+{
+  "task_id": "packaging_delivery",
+  "instruction": "Bring the object from the shelf to the packing table, put it into the box, close the box, and deliver it to the drop-off zone.",
+  "initial_state": [
+    "object_at(object, shelf)",
+    "box_at(box, packing_table)",
+    "robot_at(go2_z1, start_zone)",
+    "robot_at(franka, packing_table)",
+    "object_graspable(object)",
+    "box_closed(box)"
+  ],
+  "goal_state": [
+    "object_at(box, dropoff_zone)",
+    "box_closed(box)"
+  ],
+  "objects": [
+    "object",
+    "box"
+  ],
+  "locations": [
+    "start_zone",
+    "shelf",
+    "packing_table",
+    "dropoff_zone"
+  ]
+}
