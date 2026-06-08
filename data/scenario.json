@@ -1,0 +1,479 @@
+{
+  "task_id": "gear_assembly",
+  "instruction": "Use a heterogeneous three-robot team to open the parts drawer, move the gear tray and screwdriver to the workstation, stabilize the gearbase, mount the gear on the shaft, fasten the gearbase screw, return the screwdriver, and close the drawer.",
+  "initial_state": [
+    "drawer_closed(parts_drawer)",
+    "gear_tray_at(gear_tray, parts_drawer)",
+    "screwdriver_at(screwdriver, parts_drawer)",
+    "shaft_ready(shaft)",
+    "gearbase_ready(gearbase)",
+    "robot_at(go2_z1, start_zone)",
+    "robot_at(franka1, workstation)",
+    "robot_at(franka2, workstation)"
+  ],
+  "goal_state": [
+    "gear_mounted(gear, shaft)",
+    "screw_fastened(gearbase)",
+    "screwdriver_at(screwdriver, parts_drawer)",
+    "drawer_closed(parts_drawer)"
+  ],
+  "objects": [
+    "parts_drawer",
+    "gear_tray",
+    "screwdriver",
+    "gear",
+    "shaft",
+    "gearbase"
+  ],
+  "locations": [
+    "start_zone",
+    "parts_drawer",
+    "workstation",
+    "parts_zone",
+    "tool_zone"
+  ],
+  "handoffs": [
+    {
+      "condition": "tray_at(gear_tray, parts_zone)",
+      "producer": "go2_z1",
+      "consumer": "franka2",
+      "producer_action": {
+        "robot": "go2_z1",
+        "action": "place_tray",
+        "parameters": [
+          "gear_tray",
+          "parts_zone"
+        ]
+      },
+      "before": {
+        "robot": "franka2",
+        "action": "pick_gear",
+        "parameters": [
+          "gear"
+        ]
+      }
+    },
+    {
+      "condition": "gearbase_stable(gearbase)",
+      "producer": "franka1",
+      "consumer": "franka2",
+      "producer_action": {
+        "robot": "franka1",
+        "action": "stabilize_gearbase",
+        "parameters": [
+          "gearbase"
+        ]
+      },
+      "before": {
+        "robot": "franka2",
+        "action": "mount_gear",
+        "parameters": [
+          "gear",
+          "shaft"
+        ]
+      }
+    },
+    {
+      "condition": "tool_at(screwdriver, tool_zone)",
+      "producer": "go2_z1",
+      "consumer": "franka2",
+      "producer_action": {
+        "robot": "go2_z1",
+        "action": "place_tool",
+        "parameters": [
+          "screwdriver",
+          "tool_zone"
+        ]
+      },
+      "before": {
+        "robot": "franka2",
+        "action": "pick_tool",
+        "parameters": [
+          "screwdriver"
+        ]
+      }
+    },
+    {
+      "condition": "screw_fastened(gearbase)",
+      "producer": "franka2",
+      "consumer": "go2_z1",
+      "producer_action": {
+        "robot": "franka2",
+        "action": "fasten_screw",
+        "parameters": [
+          "gearbase",
+          "screwdriver"
+        ]
+      },
+      "before": {
+        "robot": "go2_z1",
+        "action": "return_tool",
+        "parameters": [
+          "screwdriver",
+          "parts_drawer"
+        ]
+      }
+    }
+  ],
+  "constraints": [
+    "go2_z1 must move the gear tray and the screwdriver before waiting for screw_fastened(gearbase).",
+    "There are two distinct pick_tool(screwdriver) actions: go2_z1 picks the screwdriver from the drawer before place_tool, and franka2 picks the screwdriver after Condition tool_at(screwdriver, tool_zone).",
+    "go2_z1 BT order should include open_drawer, pick_tray, place_tray, pick_tool, place_tool, Condition screw_fastened, return_tool, close_drawer.",
+    "franka1 BT order should include hold_gearbase, stabilize_gearbase.",
+    "franka2 BT order should include Condition tray_at, Condition gearbase_stable, pick_gear, mount_gear, Condition tool_at, pick_tool, fasten_screw."
+  ],
+  "required_tasks": [
+    {
+      "id": "t1",
+      "robot": "go2_z1",
+      "action": "open_drawer",
+      "parameters": [
+        "parts_drawer"
+      ],
+      "depends_on": []
+    },
+    {
+      "id": "t2",
+      "robot": "go2_z1",
+      "action": "pick_tray",
+      "parameters": [
+        "gear_tray"
+      ],
+      "depends_on": [
+        "t1"
+      ]
+    },
+    {
+      "id": "t3",
+      "robot": "go2_z1",
+      "action": "place_tray",
+      "parameters": [
+        "gear_tray",
+        "parts_zone"
+      ],
+      "depends_on": [
+        "t2"
+      ]
+    },
+    {
+      "id": "t4",
+      "robot": "go2_z1",
+      "action": "pick_tool",
+      "parameters": [
+        "screwdriver"
+      ],
+      "depends_on": [
+        "t1"
+      ]
+    },
+    {
+      "id": "t5",
+      "robot": "go2_z1",
+      "action": "place_tool",
+      "parameters": [
+        "screwdriver",
+        "tool_zone"
+      ],
+      "depends_on": [
+        "t4"
+      ]
+    },
+    {
+      "id": "t6",
+      "robot": "franka1",
+      "action": "hold_gearbase",
+      "parameters": [
+        "gearbase"
+      ],
+      "depends_on": []
+    },
+    {
+      "id": "t7",
+      "robot": "franka1",
+      "action": "stabilize_gearbase",
+      "parameters": [
+        "gearbase"
+      ],
+      "depends_on": [
+        "t6"
+      ]
+    },
+    {
+      "id": "t8",
+      "robot": "franka2",
+      "action": "pick_gear",
+      "parameters": [
+        "gear"
+      ],
+      "depends_on": [
+        "t3"
+      ]
+    },
+    {
+      "id": "t9",
+      "robot": "franka2",
+      "action": "mount_gear",
+      "parameters": [
+        "gear",
+        "shaft"
+      ],
+      "depends_on": [
+        "t7",
+        "t8"
+      ]
+    },
+    {
+      "id": "t10",
+      "robot": "franka2",
+      "action": "pick_tool",
+      "parameters": [
+        "screwdriver"
+      ],
+      "depends_on": [
+        "t5"
+      ]
+    },
+    {
+      "id": "t11",
+      "robot": "franka2",
+      "action": "fasten_screw",
+      "parameters": [
+        "gearbase",
+        "screwdriver"
+      ],
+      "depends_on": [
+        "t9",
+        "t10"
+      ]
+    },
+    {
+      "id": "t12",
+      "robot": "go2_z1",
+      "action": "return_tool",
+      "parameters": [
+        "screwdriver",
+        "parts_drawer"
+      ],
+      "depends_on": [
+        "t11"
+      ]
+    },
+    {
+      "id": "t13",
+      "robot": "go2_z1",
+      "action": "close_drawer",
+      "parameters": [
+        "parts_drawer"
+      ],
+      "depends_on": [
+        "t12"
+      ]
+    }
+  ],
+  "robots": [
+    {
+      "id": "go2_z1",
+      "name": "Unitree Go2 with Z1 arm",
+      "type": "mobile_manipulator",
+      "capabilities": [
+        {
+          "name": "open_drawer",
+          "parameters": [
+            "drawer"
+          ],
+          "preconditions": [
+            "drawer_closed(drawer)"
+          ],
+          "effects": [
+            "drawer_open(drawer)"
+          ]
+        },
+        {
+          "name": "close_drawer",
+          "parameters": [
+            "drawer"
+          ],
+          "preconditions": [
+            "drawer_open(drawer)"
+          ],
+          "effects": [
+            "drawer_closed(drawer)"
+          ]
+        },
+        {
+          "name": "pick_tray",
+          "parameters": [
+            "tray"
+          ],
+          "preconditions": [
+            "drawer_open(parts_drawer)",
+            "gear_tray_at(tray, parts_drawer)"
+          ],
+          "effects": [
+            "holding(go2_z1, tray)",
+            "not_gear_tray_at(tray)"
+          ]
+        },
+        {
+          "name": "place_tray",
+          "parameters": [
+            "tray",
+            "location"
+          ],
+          "preconditions": [
+            "holding(go2_z1, tray)"
+          ],
+          "effects": [
+            "tray_at(tray, location)",
+            "not_holding(go2_z1, tray)"
+          ]
+        },
+        {
+          "name": "pick_tool",
+          "parameters": [
+            "tool"
+          ],
+          "preconditions": [
+            "drawer_open(parts_drawer)",
+            "screwdriver_at(tool, parts_drawer)"
+          ],
+          "effects": [
+            "holding(go2_z1, tool)",
+            "not_screwdriver_at(tool)",
+            "not_tool_at(tool)"
+          ]
+        },
+        {
+          "name": "place_tool",
+          "parameters": [
+            "tool",
+            "location"
+          ],
+          "preconditions": [
+            "holding(go2_z1, tool)"
+          ],
+          "effects": [
+            "tool_at(tool, location)",
+            "screwdriver_at(tool, location)",
+            "not_holding(go2_z1, tool)"
+          ]
+        },
+        {
+          "name": "return_tool",
+          "parameters": [
+            "tool",
+            "location"
+          ],
+          "preconditions": [
+            "screw_fastened(gearbase)"
+          ],
+          "effects": [
+            "tool_at(tool, location)",
+            "screwdriver_at(tool, location)"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "franka1",
+      "name": "Franka Panda 1",
+      "type": "manipulator",
+      "capabilities": [
+        {
+          "name": "hold_gearbase",
+          "parameters": [
+            "gearbase"
+          ],
+          "preconditions": [
+            "robot_at(franka1, workstation)",
+            "gearbase_ready(gearbase)"
+          ],
+          "effects": [
+            "holding(franka1, gearbase)"
+          ]
+        },
+        {
+          "name": "stabilize_gearbase",
+          "parameters": [
+            "gearbase"
+          ],
+          "preconditions": [
+            "holding(franka1, gearbase)"
+          ],
+          "effects": [
+            "gearbase_stable(gearbase)"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "franka2",
+      "name": "Franka Panda 2",
+      "type": "manipulator",
+      "capabilities": [
+        {
+          "name": "pick_gear",
+          "parameters": [
+            "gear"
+          ],
+          "preconditions": [
+            "robot_at(franka2, workstation)",
+            "tray_at(gear_tray, parts_zone)"
+          ],
+          "effects": [
+            "holding(franka2, gear)"
+          ]
+        },
+        {
+          "name": "mount_gear",
+          "parameters": [
+            "gear",
+            "shaft"
+          ],
+          "preconditions": [
+            "holding(franka2, gear)",
+            "gearbase_stable(gearbase)",
+            "shaft_ready(shaft)"
+          ],
+          "effects": [
+            "gear_mounted(gear, shaft)",
+            "not_holding(franka2, gear)"
+          ]
+        },
+        {
+          "name": "pick_tool",
+          "parameters": [
+            "tool"
+          ],
+          "preconditions": [
+            "robot_at(franka2, workstation)",
+            "tool_at(tool, tool_zone)"
+          ],
+          "effects": [
+            "holding(franka2, tool)",
+            "not_tool_at(tool)",
+            "not_screwdriver_at(tool)"
+          ]
+        },
+        {
+          "name": "fasten_screw",
+          "parameters": [
+            "gearbase",
+            "tool"
+          ],
+          "preconditions": [
+            "gear_mounted(gear, shaft)",
+            "gearbase_stable(gearbase)",
+            "holding(franka2, tool)"
+          ],
+          "effects": [
+            "screw_fastened(gearbase)",
+            "tool_at(tool, workstation)",
+            "screwdriver_at(tool, workstation)",
+            "not_holding(franka2, tool)"
+          ]
+        }
+      ]
+    }
+  ]
+}

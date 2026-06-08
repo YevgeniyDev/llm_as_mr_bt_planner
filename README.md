@@ -1,152 +1,129 @@
-# LLM-as-Multi-Robot-BT-Planner
+# LLM-as-MR-BT-Planner
 
-Capability-aware generation of synchronized Behavior Trees for heterogeneous robot teams.
+Draft prototype for generating synchronized multi-robot Behavior Trees (BTs) with an LLM.
 
-## Prototype Status
+The repository is intentionally small. It keeps one AI-driven path only:
 
-This repository currently contains Prototype v0.7:
+1. load a multi-robot scenario,
+2. ask an OpenAI LLM to produce a task graph, assignments, handoffs, and per-robot BTs,
+3. validate the returned JSON against robot capabilities and handoff conditions,
+4. ask the LLM to correct invalid or deadlocked plans using validator and simulator feedback,
+5. run a small symbolic simulation,
+6. write one result file.
 
-- v0.1 symbolic rule-based planning pipeline
-- v0.2 ablation experiments, failure cases, and deterministic repair
-- v0.3 optional LLM planning backend with mock and OpenAI-compatible modes
-- v0.4 repeated LLM trials and automatic result aggregation
-- v0.5 paper-ready result export and error analysis
-- v0.6 second symbolic task: gear assembly with three-robot synchronization
-- v0.7 hardened LLM prompt/repair path for gear assembly
+There are no rule-based baselines, ablations, deterministic repair loops, or paper-table exporters.
 
-The project is still a symbolic research prototype. It does not control real robots.
+## Files
 
-## Run The Rule-Based Pipeline
+- `src/main.py` - LLM call, validator, symbolic BT simulator, and CLI.
+- `data/scenario.json` - the current three-robot gear assembly scenario.
+- `data/simple_handoff.json` - a small two-robot handoff scenario used as a smoke test.
+- `.env.example` - API configuration template.
+
+## Run
+
+Requires Python 3.10+ and no extra Python packages.
+
+Copy `.env.example` to `.env`, set `OPENAI_API_KEY`, then run:
 
 ```powershell
 python src/main.py
 ```
 
-Packaging is the default task. You can also choose a task explicitly:
+Optional:
 
 ```powershell
-python src/main.py --task packaging_delivery
-python src/main.py --task gear_assembly
+python src/main.py --scenario data/scenario.json --output outputs/run.json --model gpt-4o-mini --max-corrections 4
+python src/main.py --scenario data/simple_handoff.json --output outputs/simple_handoff.json --model gpt-4o-mini
+python src/main.py --scenario data/scenario.json --output outputs/gear_trials.json --model gpt-4o-mini --trials 3
 ```
 
-This writes:
+The output is a single JSON file:
 
-- `outputs/packaging_plan.json`
-- `outputs/validation_result.json`
-- `outputs/simulation_result.json`
-- `outputs/metrics.json`
-
-For gear assembly, task-specific files are written with the `gear_assembly_` prefix, such as `outputs/gear_assembly_plan.json`.
-
-## Run Ablation Experiments
-
-```powershell
-python src/run_experiments.py
+```text
+outputs/run.json
 ```
 
-Task-specific ablations can also be run:
+It contains the final LLM plan, validation errors if any, correction-attempt counts, final symbolic state, execution trace, and a minimal success summary. With `--trials N`, the result file contains one summary plus each trial result.
 
-```powershell
-python src/run_experiments.py --task packaging_delivery
-python src/run_experiments.py --task gear_assembly
+## Main Algorithm
+
+```text
+Algorithm 1: LLM-guided multi-robot BT generation
+Input: scenario S = (I, G, R, A, H), LLM model M, tick bound K, correction bound C
+       I: initial predicates
+       G: goal predicates
+       R: robots
+       A: robot capability library
+       H: required inter-robot handoffs
+Output: result Omega = (Pi, V, X)
+        Pi: generated plan
+        V: validation report
+        X: symbolic simulation report
+
+1: function LLM-MRBTP(S, M, K)
+2:     P <- BuildPrompt(S)                         // scenario, capabilities, schema
+3:     y <- QueryLLM(M, P)                          // JSON-only response
+4:     Pi <- ParsePlan(y)
+5:     for r <- 0 to C do
+6:         V <- ValidatePlan(Pi, S)
+7:         if V.valid = true then
+8:             X <- TickBTs(Pi.behavior_trees, I, A, K)
+9:         else
+10:            X <- SkippedSimulation(V)
+11:        end if
+12:        if V.valid = true and X.success = true then
+13:            return Omega(Pi, V, X)
+14:        end if
+15:        if r = C then return Omega(Pi, V, X)
+16:        P_r <- BuildCorrectionPrompt(S, Pi, V.errors, X)
+17:        y <- QueryLLM(M, P_r)
+18:        Pi <- ParsePlan(y)                       // complete corrected plan
+19:    end for
+20: end function
+
+21: function ValidatePlan(Pi, S)
+22:     check required fields: task_graph, assignments, synchronization, behavior_trees
+23:     check task graph dependencies are acyclic
+24:     check required_tasks or required_actions coverage
+25:     check each assigned robot can execute its task action
+26:     check each assigned action appears in that robot's BT
+27:     check each handoff h in H appears as a synchronization condition
+28:     check producer BT creates h.condition and consumer BT waits for it
+29:     return validation report
+30: end function
+
+31: function TickBTs(B, I, A, K)
+32:     state <- I
+33:     cursor_i <- 0 for each robot tree B_i
+34:     for tick <- 1 to K do
+35:         if every cursor is finished then return SuccessIfGoalsHold(state)
+36:         progress <- false
+37:         for each robot i do
+38:             n <- next node in B_i
+39:             if n is Condition and n.predicate in state then
+40:                 cursor_i <- cursor_i + 1; progress <- true
+41:             else if n is Action and preconditions(n, state) hold then
+42:                 state <- ApplyEffects(n, state)
+43:                 cursor_i <- cursor_i + 1; progress <- true
+44:             end if
+45:         end for
+46:         if progress = false then return Deadlock(state)
+47:     end for
+48:     return Timeout(state)
+49: end function
 ```
 
-This writes experiment results under:
+## Current Scenario
 
-- `outputs/experiments/summary.json`
-- `outputs/experiments/{experiment_name}/`
+The included scenario is a symbolic gear assembly task:
 
-Gear assembly ablations are written under `outputs/experiments_gear_assembly/`.
+- `go2_z1` opens the drawer, moves the gear tray and screwdriver, then returns the tool.
+- `franka1` holds and stabilizes the gearbase.
+- `franka2` picks the gear, mounts it, picks the screwdriver, and fastens the screw.
 
-Each experiment folder contains the plan, validation result, simulation result, metrics, and repaired equivalents.
+Scenarios can list `required_tasks` with stable IDs, robot assignments, actions, parameters, and dependencies. The LLM must turn those constraints into a task graph, assignments, explicit synchronization, and per-robot BTs. If a scenario omits `required_tasks`, the planner falls back to `required_actions`.
 
-## Run The LLM Experiment
+## Limitations
 
-```powershell
-python src/run_llm_experiment.py
-```
-
-Without an API key, this uses deterministic `mock_bad` mode. The expected behavior is invalid before repair and valid/successful after repair.
-
-With an API key, set:
-
-```powershell
-$env:OPENAI_API_KEY = "your_api_key"
-$env:OPENAI_MODEL = "gpt-4o-mini"
-python src/run_llm_experiment.py
-```
-
-Optional environment variables:
-
-- `OPENAI_MODEL`, default `gpt-4o-mini`
-- `OPENAI_BASE_URL`, default `https://api.openai.com/v1`
-- `OPENAI_API_URL`, explicit chat completions URL override
-- `OPENAI_TIMEOUT_SECONDS`, default `60`
-
-LLM experiment outputs are saved under:
-
-- `outputs/llm_experiment/llm_plan.json`
-- `outputs/llm_experiment/validation_result.json`
-- `outputs/llm_experiment/simulation_result.json`
-- `outputs/llm_experiment/metrics.json`
-- repaired result files in the same folder
-
-## Run Repeated LLM Trials
-
-```powershell
-python src/run_llm_trials.py --trials 10
-```
-
-Optional arguments:
-
-- `--trials N`, default `10`
-- `--mode auto`, `mock_bad`, `mock_good`, or `openai`
-- `--task packaging_delivery` or `gear_assembly`
-- `--output-dir outputs/llm_trials`
-
-Examples:
-
-```powershell
-python src/run_llm_trials.py --trials 10 --mode openai --task packaging_delivery
-python src/run_llm_trials.py --trials 5 --mode openai --task gear_assembly
-```
-
-Analyze the latest validation failures:
-
-```powershell
-python src/analyze_latest_failures.py --task gear_assembly
-```
-
-This writes:
-
-- `outputs/llm_trials/summary.json`
-- `outputs/llm_trials/summary.csv`
-- `outputs/llm_trials/trial_XX/`
-
-Each trial folder contains the raw LLM plan, validation and simulation results, repaired plan, repaired validation and simulation results, repaired metrics, and `trial_summary.json`. If an API call fails, the trial folder contains `api_error.txt` with sanitized details.
-
-## Export Paper Tables
-
-After running repeated LLM trials and ablations:
-
-```powershell
-python src/run_llm_trials.py --trials 10 --mode openai
-python src/run_experiments.py
-python src/export_paper_tables.py
-```
-
-This writes paper-ready tables under:
-
-- `outputs/paper_tables/llm_trials_table.tex`
-- `outputs/paper_tables/ablation_table.tex`
-- `outputs/paper_tables/error_breakdown_table.tex`
-- `outputs/paper_tables/llm_trials_table.csv`
-- `outputs/paper_tables/error_breakdown.json`
-
-## Current Limitations
-
-- The domain is the single packaging-delivery task.
-- The simulator is symbolic and uses a simple deterministic two-robot schedule.
-- The repair loop is deterministic and scenario-specific.
-- The LLM planner expects JSON and validates/repairs output, but it is not yet a full robust planner.
-- No real robot control, ROS integration, perception, continuous geometry, timing, or collision reasoning is implemented.
+This is a simulation-first draft. It does not control real robots, ROS nodes, perception, motion planners, continuous geometry, collision checking, or real-time execution. The symbolic simulator is deliberately small so the generated BT structure stays easy to inspect before upgrading the execution backend.

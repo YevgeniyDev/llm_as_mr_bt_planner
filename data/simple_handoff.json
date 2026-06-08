@@ -1,0 +1,135 @@
+{
+  "task_id": "simple_handoff",
+  "instruction": "Use a rover to move the item from the shelf to the table, then use the arm to inspect the item.",
+  "initial_state": [
+    "item_at(item, shelf)",
+    "robot_at(rover, shelf)",
+    "robot_at(arm, table)"
+  ],
+  "goal_state": [
+    "item_processed(item)"
+  ],
+  "objects": [
+    "item"
+  ],
+  "locations": [
+    "shelf",
+    "table"
+  ],
+  "handoffs": [
+    {
+      "condition": "item_at(item, table)",
+      "producer": "rover",
+      "consumer": "arm",
+      "producer_action": {
+        "robot": "rover",
+        "action": "place_item",
+        "parameters": [
+          "item",
+          "table"
+        ]
+      },
+      "before": {
+        "robot": "arm",
+        "action": "inspect_item",
+        "parameters": [
+          "item"
+        ]
+      }
+    }
+  ],
+  "constraints": [
+    "rover BT order should include pick_item, place_item.",
+    "arm BT order should include Condition item_at(item, table), inspect_item."
+  ],
+  "required_tasks": [
+    {
+      "id": "t1",
+      "robot": "rover",
+      "action": "pick_item",
+      "parameters": [
+        "item"
+      ],
+      "depends_on": []
+    },
+    {
+      "id": "t2",
+      "robot": "rover",
+      "action": "place_item",
+      "parameters": [
+        "item",
+        "table"
+      ],
+      "depends_on": [
+        "t1"
+      ]
+    },
+    {
+      "id": "t3",
+      "robot": "arm",
+      "action": "inspect_item",
+      "parameters": [
+        "item"
+      ],
+      "depends_on": [
+        "t2"
+      ]
+    }
+  ],
+  "robots": [
+    {
+      "id": "rover",
+      "name": "Tabletop rover",
+      "type": "mobile_base",
+      "capabilities": [
+        {
+          "name": "pick_item",
+          "parameters": [
+            "item"
+          ],
+          "preconditions": [
+            "robot_near(rover, item)"
+          ],
+          "effects": [
+            "holding(rover, item)",
+            "not_item_at(item)"
+          ]
+        },
+        {
+          "name": "place_item",
+          "parameters": [
+            "item",
+            "location"
+          ],
+          "preconditions": [
+            "holding(rover, item)"
+          ],
+          "effects": [
+            "item_at(item, location)",
+            "not_holding(rover, item)"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "arm",
+      "name": "Inspection arm",
+      "type": "manipulator",
+      "capabilities": [
+        {
+          "name": "inspect_item",
+          "parameters": [
+            "item"
+          ],
+          "preconditions": [
+            "robot_at(arm, table)",
+            "item_at(item, table)"
+          ],
+          "effects": [
+            "item_processed(item)"
+          ]
+        }
+      ]
+    }
+  ]
+}
