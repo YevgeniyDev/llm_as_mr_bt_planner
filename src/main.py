@@ -21,23 +21,13 @@ def main() -> None:
     output_path = resolve_project_path(args.output)
     scenario = load_json(scenario_path)
 
-    model = args.model or os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
-    if args.trials == 1:
-        result = run_trial(
-            scenario=scenario,
-            model=model,
-            max_corrections=args.max_corrections,
-            max_ticks=args.max_ticks,
-            trial_index=1,
-        )
-    else:
-        result = run_trials(
-            scenario=scenario,
-            model=model,
-            max_corrections=args.max_corrections,
-            max_ticks=args.max_ticks,
-            trials=args.trials,
-        )
+    model = args.model or os.environ.get("OPENAI_MODEL", "gpt-4o")
+    result = run_planner(
+        scenario=scenario,
+        model=model,
+        max_corrections=args.max_corrections,
+        max_ticks=args.max_ticks,
+    )
 
     save_json(output_path, result)
     print_summary(result, output_path)
@@ -50,25 +40,21 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--model", default=None, help="Override OPENAI_MODEL for this run.")
     parser.add_argument("--max-ticks", type=int, default=80, help="Maximum symbolic simulator ticks.")
     parser.add_argument("--max-corrections", type=int, default=4, help="LLM self-correction rounds after validation or simulation errors.")
-    parser.add_argument("--trials", type=int, default=1, help="Run repeated independent LLM attempts for this scenario.")
     args = parser.parse_args()
     if args.max_ticks < 1:
         parser.error("--max-ticks must be at least 1")
     if args.max_corrections < 0:
         parser.error("--max-corrections cannot be negative")
-    if args.trials < 1:
-        parser.error("--trials must be at least 1")
     return args
 
 
-def run_trial(
+def run_planner(
     scenario: dict[str, Any],
     model: str,
     max_corrections: int,
     max_ticks: int,
-    trial_index: int,
 ) -> dict[str, Any]:
-    plan, validation, simulation, attempts = generate_evaluated_plan(
+    plan, validation, simulation, correction_rounds = generate_evaluated_plan(
         scenario=scenario,
         model=model,
         max_corrections=max_corrections,
@@ -77,12 +63,10 @@ def run_trial(
     return {
         "task_id": scenario.get("task_id"),
         "model": model,
-        "trial": trial_index,
         "valid": validation["valid"],
         "success": simulation["success"],
         "goal_success": simulation["goal_success"],
-        "correction_rounds": len(attempts) - 1,
-        "attempts": attempts,
+        "correction_rounds": correction_rounds,
         "plan": plan,
         "validation_errors": validation["errors"],
         "simulation": {
@@ -93,42 +77,14 @@ def run_trial(
     }
 
 
-def run_trials(
-    scenario: dict[str, Any],
-    model: str,
-    max_corrections: int,
-    max_ticks: int,
-    trials: int,
-) -> dict[str, Any]:
-    results = [
-        run_trial(
-            scenario=scenario,
-            model=model,
-            max_corrections=max_corrections,
-            max_ticks=max_ticks,
-            trial_index=index,
-        )
-        for index in range(1, trials + 1)
-    ]
-    return {
-        "task_id": scenario.get("task_id"),
-        "model": model,
-        "trials": trials,
-        "success_count": sum(1 for item in results if item["success"]),
-        "valid_count": sum(1 for item in results if item["valid"]),
-        "goal_success_count": sum(1 for item in results if item["goal_success"]),
-        "results": results,
-    }
-
-
 def generate_evaluated_plan(
     scenario: dict[str, Any],
     model: str,
     max_corrections: int,
     max_ticks: int,
-) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any], list[dict[str, Any]]]:
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any], int]:
     plan = query_plan(prompt=build_prompt(scenario), model=model)
-    attempts = []
+    correction_rounds = 0
 
     for round_index in range(0, max_corrections + 1):
         plan.setdefault("task_id", scenario.get("task_id"))
@@ -138,19 +94,19 @@ def generate_evaluated_plan(
             if validation["valid"]
             else skipped_simulation()
         )
-        attempts.append(attempt_summary(round_index=round_index, validation=validation, simulation=simulation))
 
         if validation["valid"] and simulation["success"]:
             break
         if round_index == max_corrections:
             break
 
+        correction_rounds += 1
         plan = query_plan(
-            prompt=build_correction_prompt(scenario, plan, validation["errors"], simulation),
+            prompt=build_correction_prompt(scenario, validation["errors"], simulation),
             model=model,
         )
 
-    return plan, validation, simulation, attempts
+    return plan, validation, simulation, correction_rounds
 
 
 def query_plan(prompt: str, model: str) -> dict[str, Any]:
@@ -198,21 +154,6 @@ def query_plan(prompt: str, model: str) -> dict[str, Any]:
     return plan
 
 
-def attempt_summary(
-    round_index: int,
-    validation: dict[str, Any],
-    simulation: dict[str, Any],
-) -> dict[str, Any]:
-    return {
-        "round": round_index,
-        "valid": validation["valid"],
-        "success": simulation["success"],
-        "goal_success": simulation["goal_success"],
-        "num_validation_errors": len(validation["errors"]),
-        "num_simulation_errors": len(simulation["errors"]),
-    }
-
-
 def build_prompt(scenario: dict[str, Any]) -> str:
     robot_summary = [
         {
@@ -231,8 +172,6 @@ def build_prompt(scenario: dict[str, Any]) -> str:
         for robot in scenario.get("robots", [])
     ]
 
-    required_tasks = scenario.get("required_tasks", [])
-    required_actions = scenario_required_actions(scenario)
     task_summary = {
         "task_id": scenario.get("task_id"),
         "instruction": scenario.get("instruction"),
@@ -240,30 +179,15 @@ def build_prompt(scenario: dict[str, Any]) -> str:
         "goal_state": scenario.get("goal_state", []),
         "objects": scenario.get("objects", []),
         "locations": scenario.get("locations", []),
-        "handoffs": scenario.get("handoffs", []),
-        "constraints": scenario.get("constraints", []),
-        "required_tasks": required_tasks,
-        "required_actions": required_actions,
     }
-    handoff_condition_nodes = [
-        {
-            "condition": handoff.get("condition"),
-            "consumer": handoff.get("consumer"),
-            "consumer_bt_condition_node": condition_node_from_predicate(handoff.get("condition")),
-            "must_appear_before": handoff.get("before"),
-        }
-        for handoff in scenario.get("handoffs", [])
-    ]
 
     return (
         "Generate a compact symbolic multi-robot behavior-tree plan for the scenario below.\n"
         "Return ONLY valid JSON. Do not use markdown or explanatory text.\n\n"
         f"Scenario:\n{json.dumps(task_summary, indent=2)}\n\n"
         f"Robot capability library:\n{json.dumps(robot_summary, indent=2)}\n\n"
-        "Required task/action coverage checklist:\n"
-        f"{json.dumps(required_tasks or required_actions, indent=2)}\n\n"
-        "Required handoff condition nodes:\n"
-        f"{json.dumps(handoff_condition_nodes, indent=2)}\n\n"
+        "Capability dependency hints derived from preconditions/effects:\n"
+        f"{json.dumps(build_dependency_hints(scenario), indent=2)}\n\n"
         "Required output schema:\n"
         "{\n"
         '  "task_graph": [\n'
@@ -287,52 +211,84 @@ def build_prompt(scenario: dict[str, Any]) -> str:
         "}\n\n"
         "Planning rules:\n"
         "1. Use only the robot, object, location, action, and predicate names supplied above.\n"
-        "2. Assign each task graph action to exactly one robot with that capability.\n"
-        "3. The task_graph must be acyclic: no task may depend on a later task that depends back on it.\n"
-        "4. Add every inter-robot handoff from Scenario.handoffs to synchronization.\n"
-        "5. Copy each handoff condition string exactly into synchronization; do not shorten or omit arguments.\n"
-        "6. If a handoff has producer_action, include that exact action in the producer task graph, assignment, and BT.\n"
-        "7. In the consumer robot BT, place the exact Required handoff condition node before the consuming Action.\n"
-        "8. Follow every Scenario.constraints item exactly.\n"
-        "9. Every Scenario.required_tasks item must appear exactly in task_graph, assignments, and that robot's BT.\n"
-        "10. If there is no required_tasks list, every Scenario.required_actions item must appear in task_graph, assignments, and that robot's BT.\n"
-        "11. If required_tasks or required_actions repeats the same action and parameters for different robots, create one distinct task per robot.\n"
-        "12. Keep BTs simple: Sequence roots with Action and Condition children only.\n"
-        "13. Every assigned task action must appear as an Action node in that robot's BT.\n"
-        "14. Do not truncate BTs: include all steps needed to reach every goal_state predicate.\n"
-        "15. A producer BT must execute an action whose effects create each handoff condition before any robot waits on it.\n"
-        "16. Avoid cyclic waits. Example: if franka2 waits for tool_at(screwdriver, tool_zone), "
-        "go2_z1 must place_tool(screwdriver, tool_zone) before waiting for screw_fastened(gearbase).\n"
-        "17. In BT nodes, 'name' is only the bare action or predicate name.\n"
+        "2. Treat capability preconditions/effects as authoritative when choosing action parameters.\n"
+        "3. Infer the task graph from goal_state by matching goals and missing preconditions to capability effects.\n"
+        "4. Include every action needed to make the goals true from initial_state; there is no hidden task list.\n"
+        "5. Assign each task graph action to exactly one robot with that capability.\n"
+        "6. Use the dependency hints to add producer actions for every non-initial precondition.\n"
+        "7. If you select a consumer from a dependency hint, instantiate one candidate_producer with "
+        "matching concrete parameters and include it before the consumer.\n"
+        "8. Dependency hints separate robot and action fields; task_graph.action and BT Action.name must be bare names, never robot.action.\n"
+        "9. A Condition node only waits; it never creates a predicate or replaces a missing producer action.\n"
+        "10. The task_graph must be acyclic.\n"
+        "11. Keep BTs simple: Sequence roots with Action and Condition children only.\n"
+        "12. Every assigned task action must appear as an Action node in that robot's BT with identical parameters.\n"
+        "13. Same action names on different robots are distinct tasks; include separate task nodes and BT Actions for each robot.\n"
+        "14. Robot-specific predicates are not interchangeable: holding(robot_a, x) does not satisfy holding(robot_b, x).\n"
+        "15. Use synchronization only for inter-robot waits: if robot B needs a predicate produced by robot A, "
+        "add it to synchronization and put the exact Condition before B consumes it.\n"
+        "16. Do not add synchronization entries for same-robot sequencing or predicates already true in initial_state.\n"
+        "17. A producer BT must execute an action whose effects create each synchronization condition.\n"
+        "18. Match predicate arguments exactly. If a later precondition needs object_at(x, location_a), "
+        "the producer action must use location_a, not a nearby or generic location.\n"
+        "19. Before a robot waits for a downstream completion condition, it must first produce any resources "
+        "that downstream robots need from it.\n"
+        "20. Do not add a Condition for a predicate that no robot can produce and that is not already in initial_state.\n"
+        "21. Follow the scenario instruction, but derive executable steps from capability preconditions/effects.\n"
+        "22. Never omit predicate arguments in Condition nodes or synchronization.condition. "
+        "Use the full predicate from preconditions/effects/goals.\n"
+        "23. In BT nodes, 'name' is only the bare action or predicate name.\n"
         "   Correct: {\"type\":\"Condition\",\"name\":\"drawer_closed\",\"parameters\":[\"parts_drawer\"]}\n"
         "   Wrong:   {\"type\":\"Condition\",\"name\":\"drawer_closed(parts_drawer)\"}\n"
-        "18. Every Action and Condition node must include a parameters array, even if empty.\n"
-        "19. Handoff Condition parameters must exactly match the handoff predicate arguments.\n"
-        "20. Prefer the smallest plan that reaches all goal_state predicates.\n"
+        "24. Every Action and Condition node must include a parameters array, even if empty.\n"
+        "25. Keep the plan compact, but completeness beats compactness: never omit producer actions needed for preconditions.\n"
     )
 
 
-def scenario_required_actions(scenario: dict[str, Any]) -> list[dict[str, Any]]:
-    if scenario.get("required_actions"):
-        return scenario["required_actions"]
-    return [
-        {
-            "robot": task.get("robot"),
-            "action": task.get("action"),
-            "parameters": task.get("parameters", []),
-        }
-        for task in scenario.get("required_tasks", [])
-    ]
+def build_dependency_hints(scenario: dict[str, Any]) -> list[dict[str, Any]]:
+    initial_state = set(scenario.get("initial_state", []))
+    constants = scenario_constants(scenario)
+    hints: list[dict[str, Any]] = []
+    for robot in scenario.get("robots", []):
+        robot_id = robot.get("id", "")
+        for capability in robot.get("capabilities", []):
+            action_parameters = capability.get("parameters", [])
+            action = {
+                "robot": robot_id,
+                "action": capability.get("name", ""),
+                "parameters": action_parameters,
+            }
+            for precondition in capability.get("preconditions", []):
+                if predicate_template_satisfied_by_initial(precondition, initial_state, action_parameters, constants):
+                    continue
+                producers = candidate_producer_specs(precondition, scenario)
+                if producers:
+                    hints.append(
+                        {
+                            "consumer": action,
+                            "needs": precondition,
+                            "candidate_producers": producers,
+                        }
+                    )
+    return hints
 
 
-def condition_node_from_predicate(predicate: str | None) -> dict[str, Any]:
-    name, parameters = parse_predicate(predicate)
-    return {"type": "Condition", "name": name, "parameters": parameters}
+def predicate_template_satisfied_by_initial(
+    predicate: str,
+    initial_state: set[str],
+    action_parameters: list[str],
+    constants: set[str],
+) -> bool:
+    name, args = parse_predicate(predicate)
+    for fact in initial_state:
+        fact_name, fact_args = parse_predicate(fact)
+        if fact_name == name and unify_effect_args(args, fact_args, action_parameters, constants) is not None:
+            return True
+    return False
 
 
 def build_correction_prompt(
     scenario: dict[str, Any],
-    invalid_plan: dict[str, Any],
     validation_errors: list[dict[str, str]],
     simulation_result: dict[str, Any],
 ) -> str:
@@ -343,16 +299,29 @@ def build_correction_prompt(
         f"Validator errors:\n{json.dumps(validation_errors, indent=2)}\n\n"
         "Simulation result:\n"
         f"{json.dumps(compact_simulation_feedback(simulation_result), indent=2)}\n\n"
-        f"Invalid plan:\n{json.dumps(invalid_plan, indent=2)}\n\n"
         "Correction requirements:\n"
+        "- Rebuild the complete plan from scratch; do not copy malformed nodes from the failed plan.\n"
         "- Every BT Action/Condition node must have a bare name and a parameters array.\n"
-        "- If Scenario.required_tasks is present, copy those task ids/actions/parameters/dependencies into task_graph and assignments.\n"
+        "- task_graph.action and BT Action.name must never include a robot prefix such as robot.action.\n"
+        "- Do not preserve malformed conditions with missing parameters; copy the exact predicate arguments from "
+        "capability preconditions/effects.\n"
+        "- Infer missing actions from goal_state and capability preconditions/effects; there is no hidden task list.\n"
         "- For each assignment, the assigned action with exact parameters must appear in that robot's BT.\n"
         "- If the same action name appears for multiple robots, add separate task_graph nodes and assignments for each robot.\n"
-        "- Consumer BTs must wait for handoff conditions before the consuming actions.\n"
-        "- Handoff Condition nodes must use the exact parameter list from the handoff condition.\n"
-        "- Producer BTs must execute actions that create handoff conditions before consumers wait for them.\n"
-        "- Task graph dependencies must be acyclic and point from consumers to already-required producer tasks.\n"
+        "- Robot-specific predicates must match exactly; one robot holding an object does not make another robot hold it.\n"
+        "- For unsupported_condition, add the listed candidate producer Action instead of waiting on the condition when the producer is the same robot.\n"
+        "- Consumer BTs should wait for inter-robot synchronization conditions before the consuming actions.\n"
+        "- Do not create synchronization entries for same-robot ordering or initial-state predicates.\n"
+        "- Synchronization Condition nodes must use the exact predicate arguments produced by the producer action.\n"
+        "- Producer BTs must execute actions that create synchronization conditions before consumers wait for them.\n"
+        "- A Condition node cannot fix unsupported_precondition; add the candidate producer action instead.\n"
+        "- Treat unsupported_precondition and simulation missing_preconditions literally: add or re-parameterize "
+        "earlier actions so an effect string exactly equals each missing predicate.\n"
+        "- For every unsupported_precondition, one listed candidate producer action must appear in task_graph, assignments, and the producer robot BT.\n"
+        "- If a missing predicate contains a location, use that exact location in the producer action parameters.\n"
+        "- Before a robot waits for a downstream condition, make sure it has already produced every resource "
+        "that downstream robots need from it.\n"
+        "- Task graph dependencies must be acyclic and point from consumers to producer tasks that happen earlier.\n"
         "- Avoid cyclic waits such as robot A waiting for robot B before A produces a condition that B needs.\n"
         "- Return only the complete corrected JSON object.\n"
     )
@@ -386,9 +355,8 @@ def validate_plan(plan: dict[str, Any], scenario: dict[str, Any]) -> dict[str, A
     validate_behavior_trees(plan.get("behavior_trees", {}), robot_capabilities, errors)
     validate_assigned_actions_are_in_trees(plan.get("behavior_trees", {}), tasks, assignments, errors)
     validate_bt_actions_are_assigned(plan.get("behavior_trees", {}), tasks, assignments, errors)
-    validate_required_tasks(plan.get("behavior_trees", {}), tasks, assignments, scenario, errors)
-    validate_required_actions(plan.get("behavior_trees", {}), tasks, assignments, scenario, errors)
-    validate_handoffs(plan, scenario, errors)
+    validate_predicate_support(plan, scenario, errors)
+    validate_synchronization(plan, scenario, errors)
 
     return {"valid": not errors, "errors": errors}
 
@@ -586,101 +554,209 @@ def validate_bt_actions_are_assigned(
                 )
 
 
-def validate_required_actions(
+def validate_predicate_support(plan: dict[str, Any], scenario: dict[str, Any], errors: list[dict[str, str]]) -> None:
+    initial_state = set(scenario.get("initial_state", []))
+    behavior_trees = plan.get("behavior_trees", {})
+    robot_actions = {
+        robot["id"]: {capability["name"]: capability for capability in robot.get("capabilities", [])}
+        for robot in scenario.get("robots", [])
+    }
+    produced = produced_predicates_by_generated_actions(behavior_trees, robot_actions)
+
+    for goal in scenario.get("goal_state", []):
+        if goal not in initial_state and goal not in produced:
+            candidates = candidate_producers(goal, scenario)
+            add_error(
+                errors,
+                "unsupported_goal",
+                f"Goal '{goal}' is not initially true and no generated BT action creates it."
+                f"{candidate_text(candidates)}",
+            )
+
+    for robot, tree in behavior_trees.items():
+        for node in flatten_tree(tree):
+            if node.get("type") == "Condition":
+                predicate = format_predicate(node.get("name", ""), node.get("parameters", []))
+                initially_satisfied = predicate_satisfied(predicate, initial_state)
+                if initially_satisfied or predicate in produced:
+                    if not initially_satisfied:
+                        validate_condition_not_before_same_robot_producer(
+                            robot,
+                            tree,
+                            node,
+                            predicate,
+                            robot_actions,
+                            errors,
+                        )
+                    continue
+                add_error(
+                    errors,
+                    "unsupported_condition",
+                    f"Condition '{predicate}' in robot '{robot}' BT is not initially true and no generated action creates it."
+                    f"{same_name_predicate_text(predicate, initial_state | produced)}"
+                    f"{candidate_text(candidate_producers(predicate, scenario))}",
+                )
+                continue
+
+            if node.get("type") != "Action":
+                continue
+            capability = robot_actions.get(robot, {}).get(node.get("name"))
+            if not capability:
+                continue
+            bindings = dict(zip(capability.get("parameters", []), node.get("parameters", [])))
+            for precondition in capability.get("preconditions", []):
+                predicate = substitute(precondition, bindings)
+                if predicate_satisfied(predicate, initial_state) or predicate in produced:
+                    continue
+                add_error(
+                    errors,
+                    "unsupported_precondition",
+                    f"Action {format_predicate(node.get('name', ''), node.get('parameters', []))} "
+                    f"on robot '{robot}' needs '{predicate}', but no initial predicate or generated action creates it."
+                    f"{candidate_text(candidate_producers(predicate, scenario))}",
+                )
+
+
+def produced_predicates_by_generated_actions(
     behavior_trees: dict[str, Any],
-    tasks: dict[str, dict[str, Any]],
-    assignments: dict[str, str],
-    scenario: dict[str, Any],
+    robot_actions: dict[str, dict[str, dict[str, Any]]],
+) -> set[str]:
+    produced: set[str] = set()
+    for robot, tree in behavior_trees.items():
+        for node in flatten_tree(tree):
+            if node.get("type") != "Action":
+                continue
+            capability = robot_actions.get(robot, {}).get(node.get("name"))
+            if not capability:
+                continue
+            bindings = dict(zip(capability.get("parameters", []), node.get("parameters", [])))
+            for effect in capability.get("effects", []):
+                substituted = substitute(effect, bindings)
+                if not parse_predicate(substituted)[0].startswith("not_"):
+                    produced.add(substituted)
+    return produced
+
+
+def validate_condition_not_before_same_robot_producer(
+    robot: str,
+    tree: Any,
+    condition_node: dict[str, Any],
+    predicate: str,
+    robot_actions: dict[str, dict[str, dict[str, Any]]],
     errors: list[dict[str, str]],
 ) -> None:
-    flattened_by_robot = {robot: flatten_tree(tree) for robot, tree in behavior_trees.items()}
-    assigned_actions = {
-        (robot, tasks[task_id].get("action"), tuple(tasks[task_id].get("parameters", [])))
-        for task_id, robot in assignments.items()
-        if task_id in tasks
-    }
-
-    for required in scenario_required_actions(scenario):
-        robot = required.get("robot")
-        action = required.get("action")
-        parameters = required.get("parameters", [])
-        action_text = format_predicate(action or "", parameters)
-        key = (robot, action, tuple(parameters))
-
-        if key not in assigned_actions:
-            add_error(
-                errors,
-                "missing_required_assignment",
-                f"Required action {action_text} for robot '{robot}' is missing from task_graph or assignments.",
-            )
-
-        if not has_action(flattened_by_robot.get(robot, []), action, parameters):
-            add_error(
-                errors,
-                "missing_required_bt_action",
-                f"Required action {action_text} is missing from robot '{robot}' BT.",
-            )
+    nodes = flatten_tree(tree)
+    condition_index = next((index for index, node in enumerate(nodes) if node is condition_node), None)
+    if condition_index is None:
+        return
+    producer_index = find_effect_index(nodes, robot, predicate, robot_actions)
+    if producer_index is not None and condition_index < producer_index:
+        add_error(
+            errors,
+            "condition_before_producer",
+            f"Robot '{robot}' waits for '{predicate}' before its own BT action creates it.",
+        )
 
 
-def validate_required_tasks(
-    behavior_trees: dict[str, Any],
-    tasks: dict[str, dict[str, Any]],
-    assignments: dict[str, str],
+def candidate_producers(predicate: str, scenario: dict[str, Any]) -> list[str]:
+    return [
+        f"robot {candidate['robot']} action {format_predicate(candidate['action'], candidate['parameters'])}"
+        for candidate in candidate_producer_specs(predicate, scenario)
+    ]
+
+
+def candidate_producer_specs(predicate: str, scenario: dict[str, Any]) -> list[dict[str, Any]]:
+    candidates: list[dict[str, Any]] = []
+    target_name, target_args = parse_predicate(predicate)
+    constants = scenario_constants(scenario)
+    for robot in scenario.get("robots", []):
+        robot_id = robot.get("id", "")
+        for capability in robot.get("capabilities", []):
+            for effect in capability.get("effects", []):
+                effect_name, effect_args = parse_predicate(effect)
+                if effect_name.startswith("not_") or effect_name != target_name:
+                    continue
+                bindings = unify_effect_args(effect_args, target_args, capability.get("parameters", []), constants)
+                if bindings is None:
+                    continue
+                if predicate not in set(scenario.get("goal_state", [])) and requires_goal_predicate(capability, bindings, scenario):
+                    continue
+                parameters = [bindings.get(parameter, parameter) for parameter in capability.get("parameters", [])]
+                candidates.append(
+                    {
+                        "robot": robot_id,
+                        "action": capability.get("name", ""),
+                        "parameters": parameters,
+                    }
+                )
+    return candidates[:5]
+
+
+def requires_goal_predicate(
+    capability: dict[str, Any],
+    bindings: dict[str, str],
     scenario: dict[str, Any],
-    errors: list[dict[str, str]],
-) -> None:
-    flattened_by_robot = {robot: flatten_tree(tree) for robot, tree in behavior_trees.items()}
-
-    for required in scenario.get("required_tasks", []):
-        task_id = required.get("id")
-        robot = required.get("robot")
-        action = required.get("action")
-        parameters = required.get("parameters", [])
-        depends_on = required.get("depends_on", [])
-        action_text = format_predicate(action or "", parameters)
-        task = tasks.get(task_id)
-
-        if not task:
-            add_error(errors, "missing_required_task", f"Required task '{task_id}' for {action_text} is missing.")
-            continue
-
-        if task.get("action") != action or task.get("parameters", []) != parameters:
-            add_error(
-                errors,
-                "required_task_mismatch",
-                f"Required task '{task_id}' must be {action_text}, but plan has "
-                f"{format_predicate(task.get('action', ''), task.get('parameters', []))}.",
-            )
-
-        missing_dependencies = [dependency for dependency in depends_on if dependency not in task.get("depends_on", [])]
-        if missing_dependencies:
-            add_error(
-                errors,
-                "missing_required_dependency",
-                f"Required task '{task_id}' is missing dependencies {missing_dependencies}.",
-            )
-
-        if assignments.get(task_id) != robot:
-            add_error(
-                errors,
-                "required_assignment_mismatch",
-                f"Required task '{task_id}' must be assigned to robot '{robot}'.",
-            )
-
-        if not has_action(flattened_by_robot.get(robot, []), action, parameters):
-            add_error(
-                errors,
-                "missing_required_bt_action",
-                f"Required task '{task_id}' action {action_text} is missing from robot '{robot}' BT.",
-            )
+) -> bool:
+    goals = set(scenario.get("goal_state", []))
+    return any(substitute(precondition, bindings) in goals for precondition in capability.get("preconditions", []))
 
 
-def validate_handoffs(plan: dict[str, Any], scenario: dict[str, Any], errors: list[dict[str, str]]) -> None:
-    sync_conditions = {
-        sync.get("condition")
-        for sync in plan.get("synchronization", [])
-        if isinstance(sync, dict) and sync.get("condition")
-    }
+def scenario_constants(scenario: dict[str, Any]) -> set[str]:
+    robot_ids = {robot.get("id", "") for robot in scenario.get("robots", [])}
+    return set(scenario.get("objects", [])) | set(scenario.get("locations", [])) | robot_ids
+
+
+def unify_effect_args(
+    effect_args: list[str],
+    target_args: list[str],
+    action_parameters: list[str],
+    constants: set[str],
+) -> dict[str, str] | None:
+    if len(effect_args) != len(target_args):
+        return None
+
+    action_parameter_set = set(action_parameters)
+    bindings: dict[str, str] = {}
+    for effect_arg, target_arg in zip(effect_args, target_args):
+        if effect_arg in constants:
+            if effect_arg != target_arg:
+                return None
+        elif effect_arg in action_parameter_set:
+            if target_arg not in constants and target_arg != effect_arg:
+                return None
+            existing = bindings.get(effect_arg)
+            if existing is not None and existing != target_arg:
+                return None
+            bindings[effect_arg] = target_arg
+        elif effect_arg != target_arg:
+            return None
+    return bindings
+
+
+def candidate_text(candidates: list[str]) -> str:
+    if not candidates:
+        return ""
+    return f" Candidate producer actions: {', '.join(candidates)}."
+
+
+def same_name_predicate_text(predicate: str, candidates: set[str]) -> str:
+    name, _ = parse_predicate(predicate)
+    matches = sorted(
+        candidate
+        for candidate in candidates
+        if parse_predicate(candidate)[0] == name and candidate != predicate
+    )
+    if not matches:
+        return ""
+    return f" Did you mean: {', '.join(matches[:5])}?"
+
+
+def validate_synchronization(plan: dict[str, Any], scenario: dict[str, Any], errors: list[dict[str, str]]) -> None:
+    synchronization = plan.get("synchronization", [])
+    if not isinstance(synchronization, list):
+        add_error(errors, "invalid_synchronization", "synchronization must be a list.")
+        return
+
     behavior_trees = plan.get("behavior_trees", {})
     robot_actions = {
         robot["id"]: {capability["name"]: capability for capability in robot.get("capabilities", [])}
@@ -691,7 +767,8 @@ def validate_handoffs(plan: dict[str, Any], scenario: dict[str, Any], errors: li
         robot: flatten_tree(tree)
         for robot, tree in behavior_trees.items()
     }
-    for sync in plan.get("synchronization", []):
+
+    for sync in synchronization:
         if not isinstance(sync, dict):
             add_error(errors, "invalid_synchronization", "Each synchronization entry must be an object.")
             continue
@@ -700,65 +777,32 @@ def validate_handoffs(plan: dict[str, Any], scenario: dict[str, Any], errors: li
         consumer = sync.get("consumer")
         if not condition:
             add_error(errors, "invalid_synchronization", "Synchronization entry is missing condition.")
+            continue
         if producer not in robot_ids:
             add_error(errors, "unknown_robot", f"Synchronization producer '{producer}' is not a scenario robot.")
+            continue
         if consumer not in robot_ids:
             add_error(errors, "unknown_robot", f"Synchronization consumer '{consumer}' is not a scenario robot.")
-
-    for handoff in scenario.get("handoffs", []):
-        condition = handoff.get("condition")
-        if condition not in sync_conditions:
-            add_error(errors, "missing_synchronization", f"Missing handoff synchronization '{condition}'.")
-
-        producer = handoff.get("producer")
+            continue
         producer_nodes = nodes_by_robot.get(producer, [])
-        producer_action = handoff.get("producer_action", {})
-        if producer_action:
-            expected_action_index = find_action(
-                producer_nodes,
-                producer_action.get("action"),
-                producer_action.get("parameters", []),
-            )
-            if expected_action_index is None:
-                add_error(
-                    errors,
-                    "missing_handoff_producer_action",
-                    f"Producer '{producer}' BT must include action "
-                    f"{format_predicate(producer_action.get('action', ''), producer_action.get('parameters', []))} "
-                    f"to create '{condition}'.",
-                )
-
         produced_index = find_effect_index(producer_nodes, producer, condition, robot_actions)
         if produced_index is None:
+            produced = produced_predicates_by_generated_actions(behavior_trees, robot_actions)
             add_error(
                 errors,
-                "missing_handoff_producer",
-                f"Producer '{producer}' never creates handoff condition '{condition}' in its BT.",
+                "missing_sync_producer",
+                f"Producer '{producer}' never creates synchronization condition '{condition}' in its BT."
+                f"{same_name_predicate_text(condition, produced)}",
             )
 
-        before = handoff.get("before", {})
-        robot = before.get("robot")
-        nodes = nodes_by_robot.get(robot, [])
+        nodes = nodes_by_robot.get(consumer, [])
         condition_name, condition_args = parse_predicate(condition)
         condition_index = find_condition(nodes, condition_name, condition_args)
-        action_index = find_action(nodes, before.get("action"), before.get("parameters", []))
-        if action_index is not None and condition_index is None:
-            mismatched_index = find_condition_name_before(nodes, condition_name, action_index)
-            if mismatched_index is not None:
-                mismatched = nodes[mismatched_index]
-                add_error(
-                    errors,
-                    "handoff_condition_parameters",
-                    f"Robot '{robot}' waits for {action_label(mismatched)}, but must wait for exact "
-                    f"condition '{condition}' before action "
-                    f"{format_predicate(before.get('action', ''), before.get('parameters', []))}.",
-                )
-        if action_index is not None and (condition_index is None or condition_index > action_index):
+        if condition_index is None:
             add_error(
                 errors,
-                "handoff_order",
-                f"Robot '{robot}' must wait for '{condition}' before action "
-                f"{format_predicate(before.get('action', ''), before.get('parameters', []))}.",
+                "missing_sync_condition",
+                f"Consumer '{consumer}' BT must include Condition '{condition}' for synchronization.",
             )
 
 
@@ -935,13 +979,6 @@ def find_condition(nodes: list[dict[str, Any]], name: str, parameters: list[str]
     return None
 
 
-def find_condition_name_before(nodes: list[dict[str, Any]], name: str, before_index: int) -> int | None:
-    for index, node in enumerate(nodes[:before_index]):
-        if node.get("type") == "Condition" and node.get("name") == name:
-            return index
-    return None
-
-
 def find_effect_index(
     nodes: list[dict[str, Any]],
     robot: str | None,
@@ -1092,27 +1129,10 @@ def print_summary(result: dict[str, Any], output_path: Path) -> None:
     print("LLM multi-robot BT planner")
     print("=" * 28)
     print(f"Task: {result['task_id']}")
-    if "results" in result:
-        print(f"Trials: {result['trials']}")
-        print(f"Valid: {result['valid_count']}/{result['trials']}")
-        print(f"Goal reached: {result['goal_success_count']}/{result['trials']}")
-        print(f"Success: {result['success_count']}/{result['trials']}")
-    else:
-        print(f"Valid: {yes_no(result['valid'])}")
-        print(f"Goal reached: {yes_no(result['goal_success'])}")
-        print(f"Correction rounds: {result['correction_rounds']}")
+    print(f"Valid: {yes_no(result['valid'])}")
+    print(f"Goal reached: {yes_no(result['goal_success'])}")
+    print(f"Correction rounds: {result['correction_rounds']}")
     print(f"Result file: {output_path}")
-
-    if "results" in result:
-        failed = [item for item in result["results"] if not item["success"]]
-        if failed:
-            print("\nFailed trials:")
-            for item in failed:
-                print(
-                    f"- trial {item['trial']}: valid={yes_no(item['valid'])}, "
-                    f"goal={yes_no(item['goal_success'])}, corrections={item['correction_rounds']}"
-                )
-        return
 
     if result["validation_errors"]:
         print("\nValidation errors:")
