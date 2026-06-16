@@ -1,132 +1,182 @@
 # LLM-as-MR-BT-Planner
 
-Draft prototype for generating synchronized multi-robot Behavior Trees (BTs) with an LLM.
+Research framework for generating **synchronized multi-robot Behavior Trees (BTs)** with an LLM, and
+validating and symbolically executing them. Given a natural-language instruction and a *declarative*
+scenario (initial state, goal state, objects, locations, and per-robot capability libraries), an LLM must
+infer the entire plan — task graph, robot assignments, inter-robot synchronization, and per-robot BTs —
+with no hidden checklist or fixed ordering. A static validator and a tick-based simulator score the plan and
+feed structured errors back to the LLM for self-correction.
 
-The repository is intentionally small. It keeps one AI-driven path only:
+**Research stance: the LLM is the planner.** There is no deterministic BT-synthesis or back-chaining
+algorithm (unlike MRBTP-style symbolic planners). The only role of the deterministic code is to *verify and
+simulate* the LLM's output — never to author or repair plan structure. By default the program runs in **pure
+mode**: the LLM receives only the prompt + initial state + the output schema, and the validator reports *what*
+is wrong without suggesting task-specific fixes. Optional **assisted mode** (dependency hints / producer
+suggestions) exists solely as an ablation baseline — see [Research design](#research-design-pure-vs-assisted).
+
+The pipeline (Algorithm 1):
 
 1. load a multi-robot scenario,
-2. ask an OpenAI LLM to infer a task graph, assignments, synchronization, and per-robot BTs,
-3. validate the returned JSON for structure, robot capabilities, and internal synchronization consistency,
-4. ask the LLM to correct invalid or deadlocked plans using validator and simulator feedback,
-5. run a small symbolic simulation,
+2. ask an LLM to infer a task graph, assignments, synchronization, and per-robot BTs,
+3. validate the returned JSON for structure, robot capabilities, predicate support, and synchronization consistency,
+4. ask the LLM to correct invalid or deadlocked plans using validator and simulator feedback (no deterministic repair),
+5. run a tick-based symbolic BT simulation,
 6. write one result file.
 
-There are no rule-based baselines, ablations, deterministic repair loops, or paper-table exporters.
+## Highlights
 
-## Files
+- **Declarative domain model** — capability effects are explicit `add`/`delete` lists (PDDL-style), so
+  world-state semantics live in the data, not in hidden engine conventions.
+- **Real Behavior Trees** — `Sequence`, `Fallback`, and `Parallel` composites with `Action`/`Condition`
+  leaves, executed by a tick-based engine with `SUCCESS`/`FAILURE`/`RUNNING` status and reactive memory.
+  Inter-robot waits are modelled as blocking guards; one action per robot per tick gives a readable timeline.
+- **LLM is the planner** — pure mode by default (prompt + initial state only); the deterministic code only
+  validates and simulates. Three task-agnostic reliability levers — a general back-chaining *method* in the
+  prompt, best-of-N sampling, and **two-stage generation** (action plan → behavior trees) — raise success
+  without reintroducing task-specific hints.
+- **Pluggable LLM providers** — OpenAI (default) and Anthropic, with automatic fallback to Anthropic when
+  `OPENAI_API_KEY` is unset.
+- **Execution-backend abstraction** — a symbolic backend now, and a ROS/BehaviorTree.CPP scaffold
+  (`export_behaviortree_cpp_xml` + a documented `RosExecutionBackend`) for real-robot testing.
+- **Visualization** — a self-contained HTML report with a Behavior Trees view and a chronological Action Plan.
+- **Reproducible experiments** — a multi-trial runner with per-scenario metrics (success rate, validity rate,
+  mean ± std correction rounds) and CSV / Markdown / JSON outputs.
+- **Test suite** — deterministic, LLM-free `pytest` covering predicates, domain, BTs, validation, simulation,
+  planning modes, execution, and visualization. Planner *quality* is measured by real LLM runs.
 
-- `src/main.py` - LLM call, validator, symbolic BT simulator, and CLI.
-- `data/scenario.json` - the current three-robot gear assembly scenario.
-- `.env.example` - API configuration template.
+## Layout
 
-## Run
+```
+src/mrbtp/
+  predicates.py     parse/format/substitute/match/unify over name(arg, ...) facts
+  domain.py         Scenario/Robot/Capability/Effects dataclasses, loading, world-state semantics
+  bt.py             Behavior Tree node model (Sequence/Fallback/Parallel/Action/Condition)
+  plan.py           typed view over the LLM's JSON plan
+  validation.py     static plan validator -> structured errors
+  simulation.py     tick-based multi-robot BT executor (deadlock/timeout detection)
+  prompts.py        prompt + correction-prompt construction, dependency hints, JSON extraction
+  planner.py        the generate -> validate -> simulate -> self-correct loop
+  llm/              base protocol + OpenAI and Anthropic clients
+  execution/        ExecutionBackend protocol + symbolic backend + ROS scaffold
+  experiments/      multi-trial runner + metrics/report exporters
+  cli.py            `run` and `experiment` subcommands
+data/
+  scenario.json, scenario2.json          the two declarative scenarios
+tests/                                    pytest suite (engine-only, LLM-free)
+docs/architecture.md                      design notes
+```
 
-Requires Python 3.10+ and no extra Python packages.
+## Install & run
 
-Copy `.env.example` to `.env`, set `OPENAI_API_KEY`, then run:
+Python 3.10+; no third-party runtime dependencies (the LLM clients use the standard library).
 
 ```powershell
-python src/main.py
+pip install -e .            # optional; or just run with PYTHONPATH=src
+copy .env.example .env      # add OPENAI_API_KEY (or ANTHROPIC_API_KEY)
 ```
 
-Optional:
+Single run. The result file defaults to `outputs/run-<scenario>.json`, so different scenarios don't overwrite each other:
 
 ```powershell
-python src/main.py --scenario data/scenario.json --output outputs/run.json --model gpt-4o --max-corrections 4
+python -m mrbtp run --scenario data/scenario.json                  # -> outputs/run-scenario.json
+python -m mrbtp run --scenario data/scenario2.json --model gpt-4o  # -> outputs/run-scenario2.json
 ```
 
-The gear assembly scenario needs a capable model such as `gpt-4o` because the LLM must infer a longer causal chain without a hidden task checklist.
+> **Provider:** commands below use OpenAI (the default). Anthropic is also supported — add `--provider anthropic` (e.g. `--provider anthropic --model claude-opus-4-8`); runs also fall back to Anthropic automatically if `OPENAI_API_KEY` is unset.
 
-The output is a single JSON file:
+Pure mode is harder for the model (it must infer the whole producer chain itself). Three task-agnostic levers improve reliability without reintroducing per-task hints:
 
-```text
-outputs/run.json
+- the prompt includes a general back-chaining *method*, and corrections show the model its own failed plan;
+- **best-of-N** sampling keeps the first plan that validates and simulates;
+- **two-stage generation** (`--two-stage`) splits the job: the LLM first emits an ordered per-robot *action
+  plan*, which is validated on its own by running it as condition-free sequences (the simulator blocks each
+  action until its preconditions hold, so a feasible plan succeeds without explicit conditions). Only then
+  does the LLM encode that fixed action plan into behavior trees with explicit synchronization. This isolates
+  the step models most often get wrong (choosing/ordering the producer actions) from the BT-encoding step.
+
+```powershell
+python -m mrbtp run --scenario data/scenario.json --two-stage --samples 4 --temperature 0.7
 ```
 
-It contains the final LLM plan, validation errors if any, correction count, final symbolic state, execution trace, and a minimal success summary.
+(`--temperature` sets the OpenAI sampling temperature; raise it so best-of-N produces diverse candidates.)
 
-## Main Algorithm
+Export the generated trees to BehaviorTree.CPP XML for a real executor:
 
-```text
-Algorithm 1: LLM-guided multi-robot BT generation
-Input: scenario S = (u, I, G, O, L, R, A), LLM model M, tick bound K, correction bound C
-       u: natural-language task instruction
-       I: initial predicates
-       G: goal predicates
-       O: objects
-       L: locations
-       R: robots
-       A: robot capability library
-Output: result Omega = (Pi, V, X)
-        Pi: generated plan
-        V: validation report
-        X: symbolic simulation report
-
-1: function LLM-MRBTP(S, M, K)
-2:     P <- BuildPrompt(S)                         // scenario, capabilities, dependency hints, schema
-3:     y <- QueryLLM(M, P)                          // JSON-only response
-4:     Pi <- ParsePlan(y)
-5:     for r <- 0 to C do
-6:         V <- ValidatePlan(Pi, S)
-7:         if V.valid = true then
-8:             X <- TickBTs(Pi.behavior_trees, I, A, K)
-9:         else
-10:            X <- SkippedSimulation(V)
-11:        end if
-12:        if V.valid = true and X.success = true then
-13:            return Omega(Pi, V, X)
-14:        end if
-15:        if r = C then return Omega(Pi, V, X)
-16:        P_r <- BuildCorrectionPrompt(S, V.errors, X)
-17:        y <- QueryLLM(M, P_r)
-18:        Pi <- ParsePlan(y)                       // complete corrected plan
-19:    end for
-20: end function
-
-21: function ValidatePlan(Pi, S)
-22:     check required fields: task_graph, assignments, synchronization, behavior_trees
-23:     check task graph dependencies are acyclic
-24:     check each assigned robot can execute its task action
-25:     check each assigned action appears in that robot's BT
-26:     check each BT action has a matching assigned task
-27:     check action preconditions and non-initial goals have generated producers
-28:     check generated Conditions are initially true or produced by generated actions
-29:     check each generated synchronization condition is produced by its producer BT
-30:     check each generated synchronization condition appears in its consumer BT
-31:     return validation report
-32: end function
-
-33: function TickBTs(B, I, A, K)
-34:     state <- I
-35:     cursor_i <- 0 for each robot tree B_i
-36:     for tick <- 1 to K do
-37:         if every cursor is finished then return SuccessIfGoalsHold(state)
-38:         progress <- false
-39:         for each robot i do
-40:             n <- next node in B_i
-41:             if n is Condition and n.predicate in state then
-42:                 cursor_i <- cursor_i + 1; progress <- true
-43:             else if n is Action and preconditions(n, state) hold then
-44:                 state <- ApplyEffects(n, state)
-45:                 cursor_i <- cursor_i + 1; progress <- true
-46:             end if
-47:         end for
-48:         if progress = false then return Deadlock(state)
-49:     end for
-50:     return Timeout(state)
-51: end function
+```powershell
+python -m mrbtp run --scenario data/scenario.json --export-bt outputs/plan.xml
 ```
 
-## Current Scenario
+Visualize the plan as a self-contained HTML report (Mermaid; opens in a browser, no install) with two tabs:
+a **Behavior Trees** view (Actions as stadiums, Conditions as hexagons, composites as rectangles) and an
+**Action Plan** view — a chronological table of every robot's BT node as it fires (with tick, robot, node, effects, and synchronization waits):
 
-The included scenario is a symbolic gear assembly task. It gives the LLM only the instruction, initial state, goal state, objects, locations, and robot capability library.
+```powershell
+python -m mrbtp run --scenario data/scenario.json --viz outputs/trees.html
+```
 
-- `go2_z1` opens the drawer, moves the gear tray and screwdriver, then returns the tool.
-- `franka1` holds and stabilizes the gearbase.
-- `franka2` picks the gear, mounts it, picks the screwdriver, and fastens the screw.
+`mrbtp.viz.bt_to_mermaid(tree)` also returns the raw Mermaid definition for pasting into GitHub Markdown or
+https://mermaid.live.
 
-The scenario does not provide an action checklist or fixed task ordering. The LLM must infer the task graph, assignments, synchronization, and BT nodes from capability preconditions/effects. A plan is accepted only when the validator passes and the symbolic simulator reaches every `goal_state` predicate.
+Reproducible experiment across scenarios and trials, with a results table:
 
-## Limitations
+```powershell
+python -m mrbtp experiment --scenario data/scenario.json --scenario data/scenario2.json `
+    --trials 5 --csv outputs/results.csv --markdown outputs/results.md
+```
 
-This is a simulation-first draft. It does not control real robots, ROS nodes, perception, motion planners, continuous geometry, collision checking, or real-time execution. The symbolic simulator is deliberately small so the generated BT structure stays easy to inspect before upgrading the execution backend.
+Run the engine tests (deterministic, no API key, no LLM):
+
+```powershell
+python -m pytest
+```
+
+## Research design: pure vs assisted
+
+The core claim under test is *"an LLM, given only a prompt and the initial world state, can produce correct
+synchronized multi-robot BTs."* To keep that claim clean, the deterministic, task-specific planning aids are
+**off by default** and exposed as flags so you can run a controlled ablation:
+
+| Flag | `pure` (default) | `assisted` |
+|---|---|---|
+| `--hints none\|full` | no dependency hints in the prompt | precomputed precondition→producer hints injected |
+| `--feedback minimal\|rich` | validator says *what* is unsupported | validator also names candidate producer actions |
+| `--max-corrections N` | `N>0` = LLM self-correction loop | `0` = single-shot generation |
+
+The general checks (acyclicity, capability match, predicate support, synchronization consistency) are always
+on — they are task-agnostic verification, not planning, and define what "working" means. Suggested study:
+
+```powershell
+# Pure, single-shot vs pure, with self-correction:
+python -m mrbtp experiment --scenario data/scenario.json --trials 10 --max-corrections 0 --csv outputs/pure_oneshot.csv
+python -m mrbtp experiment --scenario data/scenario.json --trials 10 --max-corrections 4 --csv outputs/pure_corrected.csv
+# Assisted baseline (how much do hints/suggestions help?):
+python -m mrbtp experiment --scenario data/scenario.json --trials 10 --hints full --feedback rich --csv outputs/assisted.csv
+```
+
+Every experiment JSON records its `mode`, `include_hints`, `suggest_producers`, and `max_corrections` for
+reproducibility.
+
+## Result file
+
+A single JSON file (default `outputs/run-<scenario>.json`) with the final plan, provider/model, validity,
+goal success, correction count, the final symbolic state, the execution trace, and validation errors if any.
+
+## Scenarios
+
+- **`gear_assembly`** (default): a three-robot symbolic gear-assembly cell. `go2_z1` opens the drawer,
+  stages the gear tray and screwdriver, returns the tool, and closes the drawer; `franka1` holds and
+  stabilizes the gearbase; `franka2` picks/mounts the gear, picks the screwdriver, and fastens the screw.
+- **`sensor_calibration_cell`** (`scenario2.json`): a more dependency-heavy three-robot sensor-calibration
+  cell requiring more cross-robot synchronization (calibration, inspection, clamp release, tool return,
+  drawer closure).
+
+Both are pure `add`/`delete` declarative domains — the LLM must infer the causal chains from capability
+preconditions and effects.
+
+## Real-robot path
+
+The simulator is deliberately small so generated BT structure stays inspectable before the execution backend
+is upgraded. The seam for hardware is `mrbtp.execution`: implement `ExecutionBackend` (or fill in
+`RosExecutionBackend`) to dispatch the same trees — `export_behaviortree_cpp_xml(plan)` already emits the
+BehaviorTree.CPP / py_trees-compatible XML. This framework does not yet control real robots, ROS nodes,
+perception, motion planning, continuous geometry, collision checking, or real-time execution.

@@ -40,99 +40,72 @@
       "capabilities": [
         {
           "name": "open_drawer",
-          "parameters": [
-            "drawer"
-          ],
-          "preconditions": [
-            "drawer_closed(drawer)"
-          ],
-          "effects": [
-            "drawer_open(drawer)"
-          ]
+          "parameters": ["drawer"],
+          "preconditions": ["drawer_closed(drawer)"],
+          "effects": {
+            "add": ["drawer_open(drawer)"],
+            "delete": ["drawer_closed(drawer)"]
+          }
         },
         {
           "name": "close_drawer",
-          "parameters": [
-            "drawer"
-          ],
-          "preconditions": [
-            "drawer_open(drawer)"
-          ],
-          "effects": [
-            "drawer_closed(drawer)"
-          ]
+          "parameters": ["drawer"],
+          "preconditions": ["drawer_open(drawer)"],
+          "effects": {
+            "add": ["drawer_closed(drawer)"],
+            "delete": ["drawer_open(drawer)"]
+          }
         },
         {
           "name": "pick_tray",
-          "parameters": [
-            "tray"
-          ],
+          "parameters": ["tray"],
           "preconditions": [
             "drawer_open(parts_drawer)",
             "gear_tray_at(tray, parts_drawer)"
           ],
-          "effects": [
-            "holding(go2_z1, tray)",
-            "not_gear_tray_at(tray)"
-          ]
+          "effects": {
+            "add": ["holding(go2_z1, tray)"],
+            "delete": ["gear_tray_at(tray)"]
+          }
         },
         {
           "name": "place_tray",
-          "parameters": [
-            "tray",
-            "location"
-          ],
-          "preconditions": [
-            "holding(go2_z1, tray)"
-          ],
-          "effects": [
-            "tray_at(tray, location)",
-            "not_holding(go2_z1, tray)"
-          ]
+          "parameters": ["tray", "location"],
+          "preconditions": ["holding(go2_z1, tray)"],
+          "effects": {
+            "add": ["tray_at(tray, location)"],
+            "delete": ["tray_at(tray)", "holding(go2_z1, tray)"]
+          }
         },
         {
           "name": "pick_tool",
-          "parameters": [
-            "tool"
-          ],
+          "parameters": ["tool"],
           "preconditions": [
             "drawer_open(parts_drawer)",
             "screwdriver_at(tool, parts_drawer)"
           ],
-          "effects": [
-            "holding(go2_z1, tool)",
-            "not_screwdriver_at(tool)",
-            "not_tool_at(tool)"
-          ]
+          "effects": {
+            "add": ["holding(go2_z1, tool)"],
+            "delete": ["screwdriver_at(tool)", "tool_at(tool)"]
+          }
         },
         {
           "name": "place_tool",
-          "parameters": [
-            "tool",
-            "location"
-          ],
-          "preconditions": [
-            "holding(go2_z1, tool)"
-          ],
-          "effects": [
-            "tool_at(tool, location)",
-            "screwdriver_at(tool, location)",
-            "not_holding(go2_z1, tool)"
-          ]
+          "parameters": ["tool", "location"],
+          "preconditions": ["holding(go2_z1, tool)"],
+          "effects": {
+            "add": ["tool_at(tool, location)", "screwdriver_at(tool, location)"],
+            "delete": ["tool_at(tool)", "screwdriver_at(tool)", "holding(go2_z1, tool)"]
+          }
         },
         {
           "name": "return_tool",
-          "parameters": [
-            "tool",
-            "location"
-          ],
-          "preconditions": [
-            "screw_fastened(gearbase)"
-          ],
-          "effects": [
-            "tool_at(tool, location)",
-            "screwdriver_at(tool, location)"
-          ]
+          "parameters": ["tool", "location"],
+          "preconditions": ["screw_fastened(gearbase)"],
+          "effects": {
+            "add": ["tool_at(tool, location)", "screwdriver_at(tool, location)"],
+            "delete": ["tool_at(tool)", "screwdriver_at(tool)"]
+          }
         }
       ]
     },
@@ -143,28 +116,24 @@
       "capabilities": [
         {
           "name": "hold_gearbase",
-          "parameters": [
-            "gearbase"
-          ],
+          "parameters": ["gearbase"],
           "preconditions": [
             "robot_at(franka1, workstation)",
             "gearbase_ready(gearbase)"
           ],
-          "effects": [
-            "holding(franka1, gearbase)"
-          ]
+          "effects": {
+            "add": ["holding(franka1, gearbase)"],
+            "delete": []
+          }
         },
         {
           "name": "stabilize_gearbase",
-          "parameters": [
-            "gearbase"
-          ],
-          "preconditions": [
-            "holding(franka1, gearbase)"
-          ],
-          "effects": [
-            "gearbase_stable(gearbase)"
-          ]
+          "parameters": ["gearbase"],
+          "preconditions": ["holding(franka1, gearbase)"],
+          "effects": {
+            "add": ["gearbase_stable(gearbase)"],
+            "delete": []
+          }
         }
       ]
     },
@@ -175,65 +144,57 @@
       "capabilities": [
         {
           "name": "pick_gear",
-          "parameters": [
-            "gear"
-          ],
+          "parameters": ["gear"],
           "preconditions": [
             "robot_at(franka2, workstation)",
             "tray_at(gear_tray, parts_zone)"
           ],
-          "effects": [
-            "holding(franka2, gear)"
-          ]
+          "effects": {
+            "add": ["holding(franka2, gear)"],
+            "delete": []
+          }
         },
         {
           "name": "mount_gear",
-          "parameters": [
-            "gear",
-            "shaft"
-          ],
+          "parameters": ["gear", "shaft"],
           "preconditions": [
             "holding(franka2, gear)",
             "gearbase_stable(gearbase)",
             "shaft_ready(shaft)"
           ],
-          "effects": [
-            "gear_mounted(gear, shaft)",
-            "not_holding(franka2, gear)"
-          ]
+          "effects": {
+            "add": ["gear_mounted(gear, shaft)"],
+            "delete": ["holding(franka2, gear)"]
+          }
         },
         {
           "name": "pick_tool",
-          "parameters": [
-            "tool"
-          ],
+          "parameters": ["tool"],
           "preconditions": [
             "robot_at(franka2, workstation)",
             "tool_at(tool, tool_zone)"
           ],
-          "effects": [
-            "holding(franka2, tool)",
-            "not_tool_at(tool)",
-            "not_screwdriver_at(tool)"
-          ]
+          "effects": {
+            "add": ["holding(franka2, tool)"],
+            "delete": ["tool_at(tool)", "screwdriver_at(tool)"]
+          }
         },
         {
           "name": "fasten_screw",
-          "parameters": [
-            "gearbase",
-            "tool"
-          ],
+          "parameters": ["gearbase", "tool"],
           "preconditions": [
             "gear_mounted(gear, shaft)",
             "gearbase_stable(gearbase)",
             "holding(franka2, tool)"
           ],
-          "effects": [
-            "screw_fastened(gearbase)",
-            "tool_at(tool, workstation)",
-            "screwdriver_at(tool, workstation)",
-            "not_holding(franka2, tool)"
-          ]
+          "effects": {
+            "add": [
+              "screw_fastened(gearbase)",
+              "tool_at(tool, workstation)",
+              "screwdriver_at(tool, workstation)"
+            ],
+            "delete": ["tool_at(tool)", "screwdriver_at(tool)", "holding(franka2, tool)"]
+          }
         }
       ]
     }

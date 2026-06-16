@@ -1,0 +1,287 @@
+{
+  "task_id": "sensor_calibration_cell",
+  "instruction": "Use the three-robot team with the Go2-Z1 mobile manipulator and two Franka manipulators to open the kitting drawer, stage the sensor tray and torque driver, prepare and clamp the baseplate, seat the sensor module, connect the cable, torque the mount, calibrate and inspect the assembly, return the torque driver, close the drawer, and release the clamp after quality passes.",
+  "initial_state": [
+    "drawer_closed(kitting_drawer)",
+    "sensor_tray_at(sensor_tray, kitting_drawer)",
+    "torque_driver_at(torque_driver, kitting_drawer)",
+    "calibration_target_at(calibration_target, storage_rack)",
+    "baseplate_ready(baseplate)",
+    "bracket_ready(bracket)",
+    "cable_ready(cable)",
+    "robot_at(go2_z1, staging_area)",
+    "robot_at(franka1, assembly_bench)",
+    "robot_at(franka2, assembly_bench)"
+  ],
+  "goal_state": [
+    "sensor_calibrated(sensor_module)",
+    "quality_passed(sensor_module)",
+    "assembly_checked(baseplate)",
+    "clamp_released(baseplate)",
+    "torque_driver_at(torque_driver, kitting_drawer)",
+    "drawer_closed(kitting_drawer)"
+  ],
+  "objects": [
+    "kitting_drawer",
+    "sensor_tray",
+    "torque_driver",
+    "calibration_target",
+    "sensor_module",
+    "baseplate",
+    "bracket",
+    "cable"
+  ],
+  "locations": [
+    "staging_area",
+    "kitting_drawer",
+    "assembly_bench",
+    "parts_stand",
+    "tool_stand",
+    "storage_rack"
+  ],
+  "robots": [
+    {
+      "id": "go2_z1",
+      "name": "Unitree Go2 with Z1 arm",
+      "type": "mobile_manipulator",
+      "capabilities": [
+        {
+          "name": "open_drawer",
+          "parameters": ["drawer"],
+          "preconditions": ["drawer_closed(drawer)"],
+          "effects": {
+            "add": ["drawer_open(drawer)"],
+            "delete": ["drawer_closed(drawer)"]
+          }
+        },
+        {
+          "name": "close_drawer",
+          "parameters": ["drawer"],
+          "preconditions": [
+            "drawer_open(drawer)",
+            "torque_driver_at(torque_driver, kitting_drawer)"
+          ],
+          "effects": {
+            "add": ["drawer_closed(drawer)"],
+            "delete": ["drawer_open(drawer)"]
+          }
+        },
+        {
+          "name": "pick_tray",
+          "parameters": ["tray"],
+          "preconditions": [
+            "drawer_open(kitting_drawer)",
+            "sensor_tray_at(tray, kitting_drawer)"
+          ],
+          "effects": {
+            "add": ["holding(go2_z1, tray)"],
+            "delete": ["sensor_tray_at(tray)"]
+          }
+        },
+        {
+          "name": "place_tray",
+          "parameters": ["tray", "location"],
+          "preconditions": ["holding(go2_z1, tray)"],
+          "effects": {
+            "add": ["tray_at(tray, location)"],
+            "delete": ["tray_at(tray)", "holding(go2_z1, tray)"]
+          }
+        },
+        {
+          "name": "pick_tool",
+          "parameters": ["tool"],
+          "preconditions": [
+            "drawer_open(kitting_drawer)",
+            "torque_driver_at(tool, kitting_drawer)"
+          ],
+          "effects": {
+            "add": ["holding(go2_z1, tool)"],
+            "delete": ["torque_driver_at(tool)", "tool_at(tool)"]
+          }
+        },
+        {
+          "name": "place_tool",
+          "parameters": ["tool", "location"],
+          "preconditions": ["holding(go2_z1, tool)"],
+          "effects": {
+            "add": ["tool_at(tool, location)", "torque_driver_at(tool, location)"],
+            "delete": ["tool_at(tool)", "torque_driver_at(tool)", "holding(go2_z1, tool)"]
+          }
+        },
+        {
+          "name": "return_tool",
+          "parameters": ["tool", "location"],
+          "preconditions": [
+            "drawer_open(kitting_drawer)",
+            "torque_verified(baseplate)",
+            "tool_at(tool, assembly_bench)"
+          ],
+          "effects": {
+            "add": ["tool_at(tool, location)", "torque_driver_at(tool, location)"],
+            "delete": ["tool_at(tool)", "torque_driver_at(tool)"]
+          }
+        }
+      ]
+    },
+    {
+      "id": "franka1",
+      "name": "Franka Panda 1",
+      "type": "manipulator",
+      "capabilities": [
+        {
+          "name": "stage_baseplate",
+          "parameters": ["baseplate"],
+          "preconditions": [
+            "robot_at(franka1, assembly_bench)",
+            "baseplate_ready(baseplate)"
+          ],
+          "effects": {
+            "add": ["baseplate_staged(baseplate)"],
+            "delete": []
+          }
+        },
+        {
+          "name": "install_bracket",
+          "parameters": ["bracket", "baseplate"],
+          "preconditions": [
+            "baseplate_staged(baseplate)",
+            "bracket_ready(bracket)"
+          ],
+          "effects": {
+            "add": ["bracket_installed(bracket, baseplate)"],
+            "delete": []
+          }
+        },
+        {
+          "name": "clamp_baseplate",
+          "parameters": ["baseplate"],
+          "preconditions": ["bracket_installed(bracket, baseplate)"],
+          "effects": {
+            "add": ["base_clamped(baseplate)"],
+            "delete": []
+          }
+        },
+        {
+          "name": "release_clamp",
+          "parameters": ["baseplate"],
+          "preconditions": ["quality_passed(sensor_module)"],
+          "effects": {
+            "add": ["clamp_released(baseplate)"],
+            "delete": ["base_clamped(baseplate)"]
+          }
+        },
+        {
+          "name": "fetch_calibration_target",
+          "parameters": ["target"],
+          "preconditions": [
+            "robot_at(franka1, assembly_bench)",
+            "calibration_target_at(target, storage_rack)"
+          ],
+          "effects": {
+            "add": ["target_ready(target)", "calibration_target_at(target, assembly_bench)"],
+            "delete": ["calibration_target_at(target)"]
+          }
+        },
+        {
+          "name": "calibrate_sensor",
+          "parameters": ["sensor", "target"],
+          "preconditions": [
+            "sensor_seated(sensor, baseplate)",
+            "cable_connected(cable, sensor)",
+            "target_ready(target)"
+          ],
+          "effects": {
+            "add": ["sensor_calibrated(sensor)"],
+            "delete": []
+          }
+        },
+        {
+          "name": "inspect_assembly",
+          "parameters": ["sensor", "baseplate"],
+          "preconditions": [
+            "sensor_calibrated(sensor)",
+            "torque_verified(baseplate)",
+            "base_clamped(baseplate)"
+          ],
+          "effects": {
+            "add": ["quality_passed(sensor)", "assembly_checked(baseplate)"],
+            "delete": []
+          }
+        }
+      ]
+    },
+    {
+      "id": "franka2",
+      "name": "Franka Panda 2",
+      "type": "manipulator",
+      "capabilities": [
+        {
+          "name": "pick_sensor",
+          "parameters": ["sensor"],
+          "preconditions": [
+            "robot_at(franka2, assembly_bench)",
+            "tray_at(sensor_tray, parts_stand)"
+          ],
+          "effects": {
+            "add": ["holding(franka2, sensor)"],
+            "delete": []
+          }
+        },
+        {
+          "name": "seat_sensor",
+          "parameters": ["sensor", "baseplate"],
+          "preconditions": [
+            "holding(franka2, sensor)",
+            "base_clamped(baseplate)"
+          ],
+          "effects": {
+            "add": ["sensor_seated(sensor, baseplate)"],
+            "delete": ["holding(franka2, sensor)"]
+          }
+        },
+        {
+          "name": "connect_cable",
+          "parameters": ["cable", "sensor"],
+          "preconditions": [
+            "sensor_seated(sensor, baseplate)",
+            "cable_ready(cable)"
+          ],
+          "effects": {
+            "add": ["cable_connected(cable, sensor)"],
+            "delete": []
+          }
+        },
+        {
+          "name": "pick_tool",
+          "parameters": ["tool"],
+          "preconditions": [
+            "robot_at(franka2, assembly_bench)",
+            "tool_at(tool, tool_stand)"
+          ],
+          "effects": {
+            "add": ["holding(franka2, tool)"],
+            "delete": ["tool_at(tool)", "torque_driver_at(tool)"]
+          }
+        },
+        {
+          "name": "torque_mount",
+          "parameters": ["baseplate", "tool"],
+          "preconditions": [
+            "sensor_seated(sensor_module, baseplate)",
+            "cable_connected(cable, sensor_module)",
+            "base_clamped(baseplate)",
+            "holding(franka2, tool)"
+          ],
+          "effects": {
+            "add": [
+              "torque_verified(baseplate)",
+              "tool_at(tool, assembly_bench)",
+              "torque_driver_at(tool, assembly_bench)"
+            ],
+            "delete": ["tool_at(tool)", "torque_driver_at(tool)", "holding(franka2, tool)"]
+          }
+        }
+      ]
+    }
+  ]
+}

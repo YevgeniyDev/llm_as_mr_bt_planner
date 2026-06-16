@@ -18,3 +18,8 @@ env/
 
 # Generated experiment outputs
 outputs/
+
+# Packaging
+build/
+dist/
+*.egg-info/
