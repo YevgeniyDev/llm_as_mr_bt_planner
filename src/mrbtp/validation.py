@@ -156,6 +156,7 @@ def _validate_assignments(
             report.add("invalid_capability", f"Robot '{robot_id}' cannot execute action '{action}'.")
         if task_id in assigned:
             report.add("duplicate_assignment", f"Task '{task_id}' has more than one assignment.")
+            continue  # keep the first assignment so downstream BT cross-checks stay consistent
         assigned[task_id] = robot_id
 
     for task_id in tasks:

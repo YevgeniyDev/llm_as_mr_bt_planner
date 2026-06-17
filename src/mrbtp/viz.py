@@ -49,8 +49,12 @@ def _category(node: BTNode) -> str:
 
 
 def _shape(node_id: str, label: str, category: str) -> str:
-    # Mermaid wraps quoted labels; escape any embedded quotes as HTML entities.
-    text = label.replace('"', "&quot;")
+    # Mermaid wraps quoted labels, but a few characters still break parsing even
+    # inside quotes: newlines/tabs split the one-line node definition, '#' starts
+    # an HTML-entity escape, and a backslash can swallow the next char. Collapse
+    # whitespace and map those to entities. LLM-produced labels are untrusted.
+    text = " ".join(label.split())
+    text = text.replace("\\", "&bsol;").replace('"', "&quot;").replace("#", "&num;")
     if category == "action":
         return f'{node_id}(["{text}"])'
     if category == "condition":

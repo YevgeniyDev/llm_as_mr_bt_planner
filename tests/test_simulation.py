@@ -89,3 +89,56 @@ def test_timeout_detected():
     report = simulate(plan, _toy_scenario(), max_ticks=1)
     assert not report.success
     assert report.errors and report.errors[0]["type"] == "timeout"
+
+
+def _parallel_scenario():
+    # One robot, two independent producers. With actions_per_tick=1 only one of
+    # the two actions can fire per tick, so the Parallel must span two ticks.
+    return parse_scenario(
+        {
+            "task_id": "par",
+            "instruction": "parallel",
+            "initial_state": [],
+            "goal_state": ["p1()", "p2()"],
+            "objects": [],
+            "locations": [],
+            "robots": [
+                {
+                    "id": "A",
+                    "capabilities": [
+                        {"name": "m1", "parameters": [], "preconditions": [],
+                         "effects": {"add": ["p1()"], "delete": []}},
+                        {"name": "m2", "parameters": [], "preconditions": [],
+                         "effects": {"add": ["p2()"], "delete": []}},
+                    ],
+                },
+            ],
+        }
+    )
+
+
+def test_parallel_latches_completed_children():
+    # Regression: a Parallel whose children take more than one tick (the action
+    # budget only lets one child act per tick) must latch the child that already
+    # succeeded instead of re-ticking it forever. Without latching the first
+    # action re-fires every tick, the budget is never free for the second child,
+    # and the run dead-ends instead of succeeding.
+    plan = parse_plan(
+        {
+            "task_graph": [],
+            "assignments": [],
+            "synchronization": [],
+            "behavior_trees": {
+                "A": {"type": "Parallel", "children": [
+                    {"type": "Action", "name": "m1", "parameters": []},
+                    {"type": "Action", "name": "m2", "parameters": []},
+                ]},
+            },
+        }
+    )
+    report = simulate(plan, _parallel_scenario())
+    assert report.success
+    assert report.goal_success
+    # Each action fires exactly once (no re-execution of a latched child).
+    actions = [e for e in report.trace if e["event"] == "action"]
+    assert sorted(e["action"] for e in actions) == ["m1()", "m2()"]

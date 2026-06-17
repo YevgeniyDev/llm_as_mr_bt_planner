@@ -23,6 +23,9 @@ The pipeline (Algorithm 1):
 5. run a tick-based symbolic BT simulation,
 6. write one result file.
 
+Formal, notation-level pseudocode for all four algorithms (self-correction loop, two-stage generation,
+tick-based simulation, and the static validator) is in [`docs/algorithms.md`](docs/algorithms.md).
+
 ## Highlights
 
 - **Declarative domain model** — capability effects are explicit `add`/`delete` lists (PDDL-style), so
@@ -63,7 +66,8 @@ src/mrbtp/
 data/
   scenario.json, scenario2.json          the two declarative scenarios
 tests/                                    pytest suite (engine-only, LLM-free)
-docs/architecture.md                      design notes
+docs/architecture.md                      design notes (data flow, domain model, real-robot path)
+docs/algorithms.md                        paper-ready pseudocode for the four algorithms
 ```
 
 ## Install & run

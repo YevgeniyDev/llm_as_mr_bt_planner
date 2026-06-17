@@ -55,7 +55,10 @@ def _render_node(node: BTNode, indent: int) -> list[str]:
             body.extend(_render_node(child, indent + 1))
         return [opened, *body, f"{pad}</{node.type}>"]
     params = ";".join(node.parameters)
-    return [f"{pad}<{node.type} name={quoteattr(node.name or '')} params={quoteattr(params)}/>"]
+    # Clamp the leaf tag to the known set: an unknown/garbage node.type from a
+    # malformed plan would otherwise emit an invalid XML element name.
+    tag = node.type if node.type in {"Action", "Condition"} else "Action"
+    return [f"{pad}<{tag} name={quoteattr(node.name or '')} params={quoteattr(params)}/>"]
 
 
 class RosExecutionBackend:

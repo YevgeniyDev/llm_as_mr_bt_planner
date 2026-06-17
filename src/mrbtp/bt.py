@@ -79,7 +79,7 @@ def parse_node(data: Any) -> BTNode:
     return BTNode(
         type=str(node_type),
         name=data.get("name"),
-        parameters=tuple(parameters) if isinstance(parameters, list) else (),
+        parameters=tuple(str(p) for p in parameters) if isinstance(parameters, list) else (),
     )
 
 

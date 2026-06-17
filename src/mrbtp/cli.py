@@ -91,7 +91,7 @@ def _make_client(provider: str, model: str | None, temperature: float | None = N
     """
     if provider == "openai" and not os.environ.get("OPENAI_API_KEY") and os.environ.get("ANTHROPIC_API_KEY"):
         print("[note] OPENAI_API_KEY not set; falling back to provider 'anthropic'.", file=sys.stderr)
-        return get_client("anthropic", model=None)
+        return get_client("anthropic", model=model)
     if provider == "openai":
         return get_client("openai", model=model, temperature=temperature)
     return get_client(provider, model=model)

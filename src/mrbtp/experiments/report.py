@@ -75,5 +75,5 @@ def to_markdown_table(trials: Iterable[TrialRecord]) -> str:
     divider = "| " + " | ".join("---" for _ in _COLUMNS) + " |"
     lines = [header, divider]
     for row in rows:
-        lines.append("| " + " | ".join(str(row[column]) for column in _COLUMNS) + " |")
+        lines.append("| " + " | ".join(str(row[column]).replace("|", "\\|") for column in _COLUMNS) + " |")
     return "\n".join(lines)

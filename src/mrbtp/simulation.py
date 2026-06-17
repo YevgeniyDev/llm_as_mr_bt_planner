@@ -64,7 +64,7 @@ class _Context:
 def simulate(plan: Plan, scenario: Scenario, max_ticks: int = 80, actions_per_tick: int = 1) -> SimulationReport:
     ctx = _Context(scenario=scenario, state=set(scenario.initial_state))
     trees = plan.behavior_trees
-    memories: dict[str, dict[int, int]] = {robot: {} for robot in trees}
+    memories: dict[str, dict[int, Any]] = {robot: {} for robot in trees}
     done: dict[str, bool] = {robot: False for robot in trees}
 
     for tick in range(1, max_ticks + 1):
@@ -93,7 +93,7 @@ def simulate(plan: Plan, scenario: Scenario, max_ticks: int = 80, actions_per_ti
     return _result(ctx, scenario, errors)
 
 
-def _tick(node: BTNode, robot_id: str, ctx: _Context, memory: dict[int, int]) -> Status:
+def _tick(node: BTNode, robot_id: str, ctx: _Context, memory: dict[int, Any]) -> Status:
     if node.type == "Sequence":
         return _tick_sequence(node, robot_id, ctx, memory)
     if node.type == "Fallback":
@@ -107,7 +107,7 @@ def _tick(node: BTNode, robot_id: str, ctx: _Context, memory: dict[int, int]) ->
     return Status.FAILURE
 
 
-def _tick_sequence(node: BTNode, robot_id: str, ctx: _Context, memory: dict[int, int]) -> Status:
+def _tick_sequence(node: BTNode, robot_id: str, ctx: _Context, memory: dict[int, Any]) -> Status:
     start = memory.get(id(node), 0)
     for index in range(start, len(node.children)):
         status = _tick(node.children[index], robot_id, ctx, memory)
@@ -121,7 +121,7 @@ def _tick_sequence(node: BTNode, robot_id: str, ctx: _Context, memory: dict[int,
     return Status.SUCCESS
 
 
-def _tick_fallback(node: BTNode, robot_id: str, ctx: _Context, memory: dict[int, int]) -> Status:
+def _tick_fallback(node: BTNode, robot_id: str, ctx: _Context, memory: dict[int, Any]) -> Status:
     start = memory.get(id(node), 0)
     for index in range(start, len(node.children)):
         status = _tick(node.children[index], robot_id, ctx, memory)
@@ -135,16 +135,30 @@ def _tick_fallback(node: BTNode, robot_id: str, ctx: _Context, memory: dict[int,
     return Status.FAILURE
 
 
-def _tick_parallel(node: BTNode, robot_id: str, ctx: _Context, memory: dict[int, int]) -> Status:
+def _tick_parallel(node: BTNode, robot_id: str, ctx: _Context, memory: dict[int, Any]) -> Status:
     children = node.children
     threshold = node.success_threshold if node.success_threshold is not None else len(children)
-    statuses = [_tick(child, robot_id, ctx, memory) for child in children]
-    successes = sum(1 for status in statuses if status is Status.SUCCESS)
-    failures = sum(1 for status in statuses if status is Status.FAILURE)
+    # Reactive Parallel *with memory*: latch children that have already returned a
+    # terminal status. A succeeded/failed child is not re-ticked until the whole
+    # Parallel resets, so its one-shot action effects aren't re-applied (which
+    # could otherwise block it forever once its preconditions are consumed) and
+    # its trace entry isn't duplicated on every later tick.
+    completed: dict[int, Status] = memory.get(id(node), {})
+    for index, child in enumerate(children):
+        if index in completed:
+            continue
+        status = _tick(child, robot_id, ctx, memory)
+        if status in (Status.SUCCESS, Status.FAILURE):
+            completed[index] = status
+    successes = sum(1 for status in completed.values() if status is Status.SUCCESS)
+    failures = sum(1 for status in completed.values() if status is Status.FAILURE)
     if successes >= threshold:
+        memory[id(node)] = {}
         return Status.SUCCESS
     if failures > len(children) - threshold:
+        memory[id(node)] = {}
         return Status.FAILURE
+    memory[id(node)] = completed
     return Status.RUNNING
 
 
