@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from mrbtp.bt import BTParseError, iter_leaves, iter_nodes, parse_node
-from mrbtp.execution import export_behaviortree_cpp_xml
+from llm_mr_bt_planner.bt import BTParseError, iter_leaves, iter_nodes, parse_node
+from llm_mr_bt_planner.execution import export_behaviortree_cpp_xml
 
 
 def test_parse_nested_tree_and_iter_leaves():

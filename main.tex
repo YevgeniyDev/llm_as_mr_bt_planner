@@ -1,0 +1,380 @@
+%% LLM-as-Multi-Robot-BT-Planner
+%% Overleaf-ready IEEE journal draft.
+%% Revised to match the reference implementation (mrbtp):
+%%  - the LLM emits the whole plan (task graph + assignments + synchronization
+%%    + per-robot BTs) in one JSON object, or via two-stage generation;
+%%  - verification is a static validator + a tick-based symbolic simulator with
+%%    deadlock detection; there is NO deterministic plan synthesis or repair;
+%%  - default "pure" mode gives the model only prompt + initial state + schema;
+%%    "assisted" mode (hints / producer suggestions) is an ablation baseline.
+
+\documentclass[journal]{IEEEtran}
+
+%  -  -  - - Packages compatible with IEEEtran  -  -  - -
+\usepackage{cite}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{graphicx}
+\usepackage{array}
+\usepackage{booktabs}
+\usepackage{multirow}
+\usepackage{algorithmic}
+\usepackage{url}
+\usepackage{xcolor}
+\usepackage[hidelinks]{hyperref}
+
+% IEEE-style multiline equation page breaks after amsmath
+\interdisplaylinepenalty=2500
+
+% Theorem-like environments
+\newtheorem{proposition}{Proposition}
+
+% Figure path
+\graphicspath{{figures/}}
+
+% Lightweight macros for code-like predicate / action names in text
+\newcommand{\pred}[1]{\texttt{#1}}
+\newcommand{\act}[1]{\textsf{#1}}
+
+% Correct bad hyphenation here
+\hyphenation{op-tical net-works semi-conduc-tor multi-robot be-hav-ior synchro-ni-za-tion pre-con-di-tion}
+
+\begin{document}
+
+%  -  -  - - Title  -  -  - -
+\title{LLM-as-Multi-Robot-BT-Planner: Capability-Aware Generation of Synchronized Behavior Trees for Heterogeneous Robot Teams}
+
+%  -  -  - - Authors  -  -  - -
+\author{
+Yevgeniy~Dikun\textsuperscript{1},
+Aditya~Narendra\textsuperscript{2},
+and~Abdalla~Swikir\textsuperscript{2,*}%
+\thanks{\textsuperscript{*}Corresponding author: Abdalla Swikir (abdalla.swikir@mbzuai.ac.ae).}%
+\thanks{\textsuperscript{1}Department of Robotics and Mechatronics, School of Engineering and Digital Sciences, Nazarbayev University, Astana, Kazakhstan.}%
+\thanks{\textsuperscript{2}Mohamed bin Zayed University of Artificial Intelligence, Abu Dhabi, United Arab Emirates.}%
+\thanks{Project code: \url{https://github.com/your-username/your-repo}.}%
+}
+
+%  -  -  - - Running headers  -  -  - -
+\markboth{Draft Manuscript,~2026}%
+{Dikun \MakeLowercase{\textit{et al.}}: LLM-as-Multi-Robot-BT-Planner}
+
+%  -  -  - - Abstract + main figure under title  -  -  - -
+\IEEEaftertitletext{%
+\vspace{-0.8em}
+\noindent
+\begin{minipage}[t]{0.43\textwidth}
+\footnotesize
+\textbf{\textit{Abstract}---}
+This paper studies whether a large language model (LLM) can act as the \emph{planner} for a heterogeneous multi-robot team, generating synchronized, executable Behavior Trees (BTs) directly from a natural-language instruction and a declarative scene. Unlike single-robot BT generation, multi-robot execution additionally requires reasoning about which robot can perform each action, the causal chain of preconditions and effects, inter-robot handoffs, and explicit synchronization. We propose \emph{LLM-as-Multi-Robot-BT-Planner}, in which the LLM infers the \emph{entire} plan - task graph, capability-aware assignment, synchronization constraints, and one BT per robot - as a single structured output, with no deterministic back-chaining or plan repair. A task-agnostic static validator and a tick-based symbolic simulator with deadlock detection verify the plan and return typed, structured feedback. Invalid or deadlocked plans are corrected by the LLM itself in a closed loop. To raise reliability without reintroducing task-specific scaffolding, we use three levers - a general back-chaining \emph{method} in the prompt, best-of-$N$ sampling, and two-stage generation (action plan, then BT encoding). We separate this \emph{pure} setting (prompt + initial state + schema only) from an \emph{assisted} ablation that injects precomputed producer hints, so the ``LLM-alone'' claim can be measured. Generated trees are exported to BehaviorTree.CPP XML for downstream execution.
+
+\vspace{0.6em}
+\textbf{\textit{Index Terms}---}
+Behavior Trees, large language models, multi-robot systems, task and motion planning, capability-aware assignment, synchronized execution.
+\end{minipage}
+\hfill
+\begin{minipage}[t]{0.53\textwidth}
+\centering
+\vspace{-0.3em}
+\includegraphics[width=\linewidth]{pipeline_main.png}
+
+\vspace{0.25em}
+\refstepcounter{figure}\label{fig:main_framework}
+\parbox{\linewidth}{\footnotesize
+\textbf{Fig.~\thefigure. LLM-as-Multi-Robot-BT-Planner.}
+Left: conceptual overview - natural-language instruction, declarative scene, per-robot capability library, and the synchronized per-robot BT output. Right: the closed loop - single-shot plan inference, static validation, tick-based simulation, and LLM self-correction on structured feedback.
+}
+\end{minipage}
+\vspace{0.8em}
+}
+
+\maketitle
+
+%  -  -  - - I. Introduction  -  -  - -
+\section{Introduction}
+\IEEEPARstart{M}{ulti-robot} systems improve task efficiency and robustness by distributing subtasks across robots with different physical capabilities. Programming such systems is hard: the planner must decide not only \emph{what} actions to execute, but also \emph{which} robot executes each one, \emph{when} handoffs occur, and \emph{how} robot-specific controllers are synchronized so that one robot does not act on a precondition another robot has not yet produced.
+
+Behavior Trees (BTs) are a modular and interpretable representation for robot task execution. Their hierarchical, reactive structure makes them attractive for long-horizon manipulation and mobile manipulation \cite{colledanchise2018bt,iovino2022survey}. Yet manually designing BTs for heterogeneous teams is time-consuming and error-prone, especially when a task requires explicit inter-robot synchronization.
+
+Large language models (LLMs) offer a natural interface from instructions to structured plans. However, directly emitting executable multi-robot BTs is challenging: outputs may assign actions to incapable robots, omit handoff conditions, or order actions so that preconditions are never satisfied. Most existing LLM-based BT methods target \emph{single-robot} planning \cite{ao2025llmasbtplanner}; multi-robot BT planners, in turn, rely on symbolic cross-tree expansion rather than language-driven generation \cite{cai2025mrbtp}.
+
+This work takes a deliberately strong stance: \textbf{the LLM is the planner}. There is no deterministic BT synthesis or back-chaining algorithm. The only role of the deterministic code is to \emph{verify and simulate} the LLM's output and return structured errors, which LLM repairs on its own. An overview is shown in Fig.~\ref{fig:main_framework}. We study the research question:
+\begin{quote}
+\emph{Given only a natural-language instruction and the initial world state, can an LLM generate synchronized, executable Behavior Trees for a heterogeneous multi-robot team without any task-specific planning aid?}
+\end{quote}
+
+The main contributions are:
+\begin{itemize}
+    \item a \textbf{single-shot, capability-aware planning formulation} in which the LLM infers the full plan - task graph, assignment, synchronization, and one BT per robot - as one declarative output, with no deterministic plan synthesis or repair;
+    \item a \textbf{task-agnostic verification backbone}: a static validator that turns ``is this plan correct?'' into a typed error taxonomy, plus a tick-based symbolic simulator whose blocking-guard semantics model inter-robot waits and whose state-stagnation test soundly detects deadlock;
+    \item a \textbf{self-correction loop with three task-agnostic reliability levers} - a general back-chaining method in the prompt, best-of-$N$ sampling, and two-stage generation - raising pure-mode success without reintroducing per-task hints;
+    \item a controlled \textbf{pure-vs-assisted ablation} and an evaluation protocol on two heterogeneous three-robot scenarios (gear assembly and a synchronization-heavy sensor-calibration cell) in symbolic simulation, with BehaviorTree.CPP XML export as the seam to real executors.
+\end{itemize}
+
+%  -  -  - - II. Related Work  -  -  - -
+\section{Related Work}
+
+\subsection{Behavior Trees in Robotics}
+BTs are widely used for their modularity, reactivity, and hierarchical composition; compared with finite-state machines, they are easier to extend and reuse in long-horizon tasks \cite{colledanchise2018bt,iovino2022survey}. Automatic BT generation has been studied through symbolic planning, learning from demonstration, reinforcement learning, and formal synthesis. Our deterministic components deliberately \emph{do not} synthesize BTs; they only check and execute LLM-authored trees.
+
+\subsection{LLMs for Robot Task Planning}
+LLMs have been applied to high-level task decomposition, action sequencing, and robot program generation, reducing manual programming effort. Generated plans typically require grounding, validation, and repair before execution \cite{ahn2022saycan,singh2023progprompt,driess2023palme}. We adopt the same closed-loop philosophy but push all plan structure - including multi-robot assignment and synchronization - into the LLM.
+
+\subsection{LLM-Based Behavior Tree Generation}
+Recent work shows that LLMs can emit structured BTs for manipulation and assembly, particularly with in-context examples, human feedback, or recursive generation \cite{ao2025llmasbtplanner}. These methods focus on single-robot BTs and do not address capability-aware assignment or inter-robot synchronization, which are the central difficulties here.
+
+\subsection{Multi-Robot Behavior Tree Planning}
+Multi-robot BT planning adds heterogeneous action spaces, task allocation, synchronization, and fault tolerance. MRBTP tackles this with cross-tree expansion and intention sharing, and studies an LLM-based subtree pre-planning plugin within an otherwise symbolic planner \cite{cai2025mrbtp}. In contrast, we use the LLM to generate the synchronized multi-robot BTs \emph{directly} from a natural-language instruction, and treat symbolic machinery purely as a verifier.
+
+%  -  -  - - III. Problem Formulation  -  -  - -
+\section{Problem Formulation}
+
+\subsection{Scenario and Capability Model}
+A scenario is a tuple
+\begin{equation}
+    \mathcal{S} = (I,\, G,\, O,\, L,\, \mathcal{R}),
+\end{equation}
+where $I$ and $G$ are the initial and goal world states - each a set of ground facts $\pred{name(arg,\dots)}$ - and $O$ and $L$ are the object and location constants. The team is $\mathcal{R}=\{r_1,\dots,r_n\}$; each robot $r_i$ owns a \emph{capability library} $\mathcal{C}_i$. A capability is
+\begin{equation}
+    c = \big(\text{name},\ \text{params},\ \mathrm{pre}(c),\ \mathrm{eff}(c)\big),\quad
+    \mathrm{eff}(c) = \big(\mathrm{add}(c),\ \mathrm{del}(c)\big),
+\end{equation}
+with precondition templates $\mathrm{pre}(c)$ and PDDL-style add/delete effect templates. The domain is fully declarative: world-state semantics live in the data, not in engine conventions. Delete literals are \emph{patterns} - a delete template may supply fewer arguments than the fact (prefix match) or use a wildcard - so a single rule expresses both exact deletes and ``remove whatever value this functional fluent currently holds'' (e.g., \pred{tray\_at(tray)} clears any prior location of \pred{tray}).
+
+Executing action $a$ (capability $c$ under a parameter binding $\theta$) transforms world state $w$ by
+\begin{equation}
+    \label{eq:transition}
+    w' \;=\; \big(w \setminus \mathrm{match}(\mathrm{del}(c),\theta)\big)\ \cup\ \mathrm{ground}(\mathrm{add}(c),\theta),
+\end{equation}
+with deletes applied before adds. Equation~\eqref{eq:transition} is the \emph{only} operation that mutates world state and is shared by the simulator and the validator's reachability check.
+
+\subsection{Plan and Validity}
+A plan is
+\begin{equation}
+    P = (T,\, A,\, Y,\, B),
+\end{equation}
+a task graph $T$ (nodes $(\text{id},\text{action},\text{params},\text{depends\_on})$), an assignment $A:T\!\to\!\mathcal{R}$, a synchronization set $Y$ of edges (condition, producer, consumer), and a Behavior Tree forest $B=\{r_i \mapsto T_{r_i}\}$ with one tree per robot. A plan is \emph{valid} when:
+\begin{enumerate}
+    \item[(V1)] every assigned action is in the assigned robot's capability set (capability match);
+    \item[(V2)] every action precondition is \emph{supported} - true in $I$, produced earlier by the same robot, or produced by another robot and guarded by a synchronization \pred{Condition} before it is consumed;
+    \item[(V3)] each inter-robot dependency in $Y$ has a real producer action upstream and the exact \pred{Condition} placed before the consumer;
+    \item[(V4)] $T$ is acyclic and each BT conforms to the node schema;
+    \item[(V5)] simulated execution drives $I$ to a state satisfying $G$ without deadlock.
+\end{enumerate}
+(V1)--(V4) are checked statically (Section~\ref{sec:validation}); (V5) is checked by simulation (Section~\ref{sec:sim}). All checks are \emph{task-agnostic}: they define what ``working'' means for any scenario and never encode a task-specific plan.
+
+%  -  -  - - IV. Framework  -  -  - -
+\section{LLM-as-Multi-Robot-BT-Planner}
+\label{sec:framework}
+
+\subsection{Single-Shot Plan Inference}
+Rather than chaining several specialized LLM calls, the planner asks the model for the \emph{whole} plan in one structured JSON object conforming to a fixed schema with four fields: \texttt{task\_graph}, \texttt{assignments}, \texttt{synchronization}, and \texttt{behavior\_trees}. Capability-aware assignment and synchronization are therefore properties the single output must jointly satisfy, not separate deterministic modules. The prompt supplies only: (i) the scenario ($I$, $G$, $O$, $L$, and each robot's capability library with explicit preconditions and add/delete effects), (ii) the output schema, (iii) task-agnostic structural rules, and (iv) a general back-chaining \emph{method} (below). No task-specific producer chain is provided in the default \emph{pure} setting.
+
+\subsection{The Back-Chaining Method (Prompt-Level)}
+The dominant pure-mode failure is omitting a producer action for some precondition. The prompt therefore embeds a domain-independent procedure the model is asked to reason through: start from $G$; for each unmet goal, choose a capability whose add-effects create it; for every included action, each precondition must bottom out at $I$, at an earlier add-effect of the \emph{same} robot, or at another robot's action guarded by a synchronization \pred{Condition}; recurse until all preconditions reach $I$. A key rule encodes robot-scoped predicates: \pred{holding($r$,$x$)} is created \emph{only} by $r$'s own grasp action - another robot placing an object nearby does not make $r$ hold it. This is a \emph{method}, not a task solution: it contains no scenario-specific actions.
+
+\subsection{Behavior Tree Model and Synchronization}
+Each $T_{r_i}$ is a real tree over composites \pred{Sequence}, \pred{Fallback}, \pred{Parallel} and leaves \pred{Action} (a robot skill from $\mathcal{C}_i$) and \pred{Condition} (a world-state predicate check). \emph{Local executability} requires every \pred{Action} in $T_{r_i}$ to be in $\mathcal{A}_i$. \emph{Global synchronization} is expressed by placing a \pred{Condition} immediately before any action that depends on a predicate produced by another robot, and recording a matching edge
+\begin{equation}
+    \sigma = \langle c,\ r_p,\ r_c \rangle \in Y,
+\end{equation}
+where $c$ is the awaited condition, $r_p$ is the producer, and $r_c$ is the consumer. At execution, a \pred{Condition} whose predicate is unmet returns \pred{RUNNING} (the robot waits) rather than failing - synchronization is thus a \emph{blocking guard}, not a control-flow failure (Section~\ref{sec:sim}).
+
+\subsection{Reliability Levers (Task-Agnostic)}
+Three levers improve pure-mode reliability without per-task hints: (i) the back-chaining \emph{method} above; (ii) \textbf{best-of-$N$} sampling - draw $N$ candidate plans and keep the first that validates and simulates, ranking the rest lexicographically by (valid$\,\wedge\,$success, valid, fewest errors), which needs a non-zero sampling temperature to diversify; and (iii) \textbf{two-stage generation} (Section~\ref{sec:twostage}). All three are domain-independent.
+
+%  -  -  - - V. Generation and Self-Correction  -  -  - -
+\section{Generation and Self-Correction}
+
+\subsection{The Closed Loop (Algorithm~\ref{alg:loop})}
+The planner runs a generate--validate--simulate--correct loop. Each round samples a plan (best-of-$N$), validates it, and - if structurally valid - simulates it. On failure within budget $C$, the validator's typed errors, a compact simulation summary, and the \emph{previous plan itself} are returned to the LLM, which regenerates a corrected plan. The loop stops on the first valid \emph{and} goal-reaching plan or when the budget is exhausted; $C=0$ yields single-shot generation. Crucially, repair is performed by the LLM - the deterministic code never edits plan structure.
+
+\begin{figure}[!t]
+\centering
+\begin{minipage}{0.96\linewidth}
+\begin{algorithmic}[1]
+\STATE \textbf{Input:} scenario $\mathcal{S}$, LLM $M$, budget $C$, samples $N$, ticks $K$
+\STATE \textbf{Output:} plan $P$, reports $(e_v,e_s)$, rounds $c$
+\STATE $\textit{prompt} \leftarrow \textsc{BuildPrompt}(\mathcal{S})$ \COMMENT{schema + rules + method}
+\STATE $(P,e_v,e_s) \leftarrow \textsc{BestOfN}(M,\textit{prompt},\mathcal{S},N,K)$
+\STATE $c \leftarrow 0$
+\WHILE{$c < C$ \textbf{and} $\neg(\textsc{valid}(e_v)\wedge\textsc{success}(e_s))$}
+    \STATE $c \leftarrow c+1$
+    \STATE $\textit{prompt} \leftarrow \textsc{BuildCorrection}(\mathcal{S},e_v,e_s,P)$
+    \STATE $(P,e_v,e_s) \leftarrow \textsc{BestOfN}(M,\textit{prompt},\mathcal{S},N,K)$
+\ENDWHILE
+\STATE \textbf{return} $(P,e_v,e_s,c)$
+\STATE \COMMENT{\textemdash\textemdash\textemdash\ best-of-$N$ subroutine \textemdash\textemdash\textemdash}
+\STATE \textbf{procedure} \textsc{BestOfN}$(M,\textit{prompt},\mathcal{S},N,K)$
+\STATE $\textit{best} \leftarrow \bot$
+\FOR{$j = 1$ to $N$}
+    \STATE $P \leftarrow \textsc{Parse}(\textsc{ExtractJSON}(M.\textsc{complete}(\textit{prompt})))$
+    \STATE $e_v \leftarrow \textsc{Validate}(P,\mathcal{S})$ \COMMENT{(V1)--(V4)}
+    \STATE $e_s \leftarrow \textsc{valid}(e_v)\,?\,\textsc{Simulate}(P,\mathcal{S},K):\bot$
+    \STATE $s \leftarrow (\textsc{valid}\wedge\textsc{success},\ \textsc{valid},\ -|e_v|)$
+    \IF{$\textit{best}=\bot$ \textbf{or} $s > \textsc{score}(\textit{best})$}
+        \STATE $\textit{best} \leftarrow (P,e_v,e_s,s)$
+    \ENDIF
+    \IF{$\textsc{valid}(e_v)\wedge\textsc{success}(e_s)$} \STATE \textbf{break} \ENDIF
+\ENDFOR
+\STATE \textbf{return} \textit{best}
+\end{algorithmic}
+\end{minipage}
+\caption{LLM-as-planner self-correction loop with best-of-$N$ selection. The LLM authors and repairs all plan structure; the deterministic code only validates and simulates.}
+\label{alg:loop}
+\end{figure}
+
+\subsection{Two-Stage Generation}
+\label{sec:twostage}
+Most pure-mode errors are in \emph{choosing and ordering producer actions}, not in BT syntax. Two-stage generation isolates that step. In \textbf{Stage~1}, the LLM emits only an ordered list of actions per robot. This is validated on its own by synthesizing condition-free \pred{Sequence} trees and running the normal validator and simulator: because an \pred{Action} with unmet preconditions blocks (returns \pred{RUNNING}), a \emph{feasible} action plan simulates to success without any explicit conditions, while a missing or misordered producer surfaces as an \pred{unsupported\_precondition} or a deadlock. In \textbf{Stage~2}, given the fixed, validated action plan, the LLM wraps each robot's actions into a \pred{Sequence} and inserts \pred{Condition} nodes plus synchronization edges for cross-robot waits; the full plan is then validated and simulated with its own correction budget. Action-plan synthesis is pure bookkeeping - it does not plan; it lets the existing verifier judge an action list.
+
+\subsection{Static Validation}
+\label{sec:validation}
+The validator (Table~\ref{tab:errors}) converts plan correctness into concrete, typed errors - the structured feedback that makes LLM self-correction tractable. Let $\mathrm{produced}(P,\mathcal{S})$ be the union of add-effects of every \pred{Action} leaf in $B$. The core causal test for any goal, precondition, or condition predicate $q$ is: $q$ is supported iff $q\in I$ or $q\in\mathrm{produced}$. Acyclicity is a depth-first three-color search over $T$. In the default \emph{pure} setting, the report states \emph{what} is unsupported but never names a candidate producer; producer suggestions are an assisted-mode option only.
+
+\begin{table}[!t]
+\renewcommand{\arraystretch}{1.2}
+\caption{Task-Agnostic Validator Error Taxonomy}
+\label{tab:errors}
+\centering
+\footnotesize
+\begin{tabular}{p{0.20\linewidth} p{0.71\linewidth}}
+\toprule
+Group & Error types \\
+\midrule
+Structure & \texttt{missing\_field}, \texttt{invalid\_bt}, \texttt{invalid\_task\_graph}, \texttt{duplicate\_task}, \texttt{unknown\_dependency}, \texttt{cyclic\_dependency} \\
+Assignment & \texttt{unknown\_task}, \texttt{unknown\_robot}, \texttt{invalid\_capability}, \texttt{duplicate\_assignment}, \texttt{unassigned\_task}, \texttt{missing\_bt\_action}, \texttt{unassigned\_bt\_action} \\
+Causal support & \texttt{unsupported\_goal}, \texttt{unsupported\_precondition}, \texttt{unsupported\_condition}, \texttt{condition\_before\_producer} \\
+Synchronization & \texttt{invalid\_synchronization}, \texttt{missing\_sync\_condition}, \texttt{missing\_sync\_producer} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Symbolic Simulation and Deadlock Detection}
+\label{sec:sim}
+Validity (V1)--(V4) does not guarantee executability under inter-robot timing; a tick-based simulator checks (V5). Robots are ticked round-robin, each tree once per global tick, with standard reactive composite semantics and memory: \pred{Sequence} advances to the first non-\pred{SUCCESS} child and resumes there; \pred{Fallback} advances to the first non-\pred{FAILURE}; \pred{Parallel} ticks unfinished children and succeeds at its success threshold, latching children that have terminated so one-shot effects are not reapplied. Leaves model synchronization as blocking guards: an \pred{Action} with unmet preconditions or a \pred{Condition} on an unmet predicate returns \pred{RUNNING}. To keep the trace a readable timeline, each robot executes at most one action per global tick, so one tick is one synchronized round.
+
+\begin{proposition}[Deadlock soundness]
+If a full global tick leaves the world state $w$ unchanged while some robot's tree is still \pred{RUNNING}, then no future tick can make progress.
+\end{proposition}
+\begin{IEEEproof}[Justification]
+By \eqref{eq:transition}, only an executed action mutates $w$, and each robot acts at most once per tick. If a complete tick changes nothing, every robot is blocked on an unmet guard whose predicate is evaluated in $w$; since $w$ is identical at the next tick, every robot re-evaluates to the same blocked status, and so on indefinitely.
+\end{IEEEproof}
+
+The simulator therefore reports such a state as a deadlock (e.g., two robots each waiting on the other), distinct from a transient wait; exhausting the tick bound $K$ is reported separately as a timeout. Both are returned as structured feedback to the LLM.
+
+\subsection{Pure vs.\ Assisted (Ablation Control)}
+Two deterministic computations perform planning-style causal reasoning and are therefore \emph{off by default}, gated behind flags so they do not confound the ``LLM-alone'' claim: (i) precomputed dependency hints that, for each unmet precondition, list candidate producer capabilities in the prompt; and (ii) validator messages that append candidate-producer names. In \emph{pure} mode, neither is active: prompt $+$ initial state $+$ schema in, ``what is wrong'' out. In \emph{assisted} mode, both can be enabled to quantify how much such scaffolding helps - an upper-bound baseline, not the default path.
+
+%  -  -  - - VI. Worked Example  -  -  - -
+\section{Worked Example: Gear Assembly}
+\label{sec:example}
+We illustrate the representation on the \texttt{gear\_assembly} scenario, a heterogeneous three-robot cell with a Unitree~Go2 + Z1 mobile manipulator (\texttt{go2\_z1}) and two Franka~Panda arms (\texttt{franka1}, \texttt{franka2}). The instruction is to open the parts drawer, stage the gear tray and screwdriver, stabilize the gearbase, mount the gear on the shaft, fasten the gearbase screw, return the screwdriver, and close the drawer. The goal state is
+\begin{equation*}
+G = \{\,\pred{gear\_mounted(gear,shaft)},\ \pred{screw\_fastened(gearbase)},
+\end{equation*}
+\vspace{-1.4em}
+\begin{equation*}
+\quad\ \pred{screwdriver\_at(screwdriver,parts\_drawer)},\ \pred{drawer\_closed(parts\_drawer)}\,\}.
+\end{equation*}
+
+A correct plan must infer several cross-robot causal chains that are \emph{not} stated in the instruction. For instance, \texttt{franka2}'s \act{pick\_gear} requires \pred{tray\_at(gear\_tray, parts\_zone)}, which only \texttt{go2\_z1}'s \act{place\_tray} produces - so \texttt{franka2} must wait on a synchronization \pred{Condition} for that predicate. Likewise, \act{mount\_gear} requires \pred{gearbase\_stable(gearbase)} from \texttt{franka1}'s \act{stabilize\_gearbase}, and \texttt{go2\_z1}'s \act{return\_tool} requires \pred{screw\_fastened(gearbase)} from \texttt{franka2}. The robot-scoped predicate \pred{holding(franka2, gear)} can be created only by \texttt{franka2}'s own \act{pick\_gear}, never by \texttt{go2\_z1} placing the tray nearby. These dependencies - inferred purely from capability preconditions and effects - are exactly what the back-chaining method targets and what the validator and simulator verify.
+
+%  -  -  - - VII. Experiments and Results  -  -  - -
+\section{Experiments and Evaluation Protocol}
+
+\subsection{Experimental Setup}
+We evaluate whether the framework generates valid, synchronized, goal-reaching BTs for heterogeneous teams. Evaluation is in symbolic simulation, where actions update world-state predicates by \eqref{eq:transition}. Because LLM generation is stochastic, each condition is run for multiple independent trials, and we report rates and means with sample standard deviations. Generated trees are additionally exported to BehaviorTree.CPP XML to confirm that they map onto a standard executor schema; physical-robot execution is left to future work (Section~\ref{sec:limitations}).
+
+\subsection{Scenarios}
+\subsubsection{Gear Assembly}
+The three-robot cell of Section~\ref{sec:example} (\texttt{go2\_z1}, \texttt{franka1}, \texttt{franka2}; 13 capabilities; 4 goal predicates), requiring producer chains and three cross-robot synchronization points.
+
+\subsubsection{Sensor Calibration Cell}
+A more dependency-heavy three-robot cell (\texttt{go2\_z1} and two Franka arms; 19 capabilities; 6 goal predicates) that stages tools, prepares and clamps a baseplate, seats and connects a sensor module, torques the mount, calibrates and inspects the assembly, releases the clamp, returns the tool, and closes the drawer - requiring substantially more inter-robot synchronization.
+
+\subsection{Conditions (Ablation)}
+We compare conditions that isolate each lever; all but the last keep the model in the \emph{pure} setting:
+\begin{itemize}
+    \item \textbf{Pure, single-shot} ($C=0$): one generation, no correction.
+    \item \textbf{Pure, self-correction} ($C\!=\!4$): the loop of Algorithm~\ref{alg:loop}.
+    \item \textbf{Pure, best-of-$N$} ($N\!=\!4$): self-correction with sampling.
+    \item \textbf{Pure, two-stage}: action plan, then BT encoding (Section~\ref{sec:twostage}).
+    \item \textbf{Assisted} (upper bound): dependency hints + producer suggestions enabled.
+\end{itemize}
+
+\subsection{Baselines}
+\label{sec:baselines}
+Beyond the internal ablation, we compare against three external methods. To keep the comparison controlled, every method is scored by the \emph{same} task-agnostic validator and tick simulator on the \emph{same} two scenarios, and the two LLM baselines use the \emph{same} base model as our method; a method differs only in how it produces the plan. Because public weights/portable code are unavailable, the two LLM baselines are faithful re-implementations of the published \emph{strategy}, adapted to our scenarios.
+\begin{itemize}
+    \item \textbf{LLM-MARS-style (flat)} \cite{lykov2023llmmars}: a single generic LLM call emits one BT per robot, with no back-chaining method, no synchronization machinery, and no self-correction. It isolates how far naive multi-robot BT generation gets.
+    \item \textbf{LLM-as-BT-Planner-style (hierarchical)} \cite{ao2025llmasbtplanner}: hierarchical decomposition into per-robot action lists, BT encoding, and a recursive self-correction loop on the verifier's feedback - but robots are planned \emph{independently}, with no inter-robot synchronization, so the loop can repair same-robot ordering while cross-robot dependencies remain unaddressable.
+    \item \textbf{MRBTP} \cite{cai2025mrbtp}: the authors' released symbolic multi-robot BT planner, run on our two scenarios ported into its environment format; its per-robot trees are converted back and re-scored by our verifier for comparability.
+\end{itemize}
+
+\subsection{Metrics}
+We report: \textbf{validity rate} (fraction of plans passing (V1)--(V4)); \textbf{goal-success rate} (fraction whose simulated final state satisfies $G$ with no deadlock, i.e., (V5)); \textbf{synchronization-error rate} (fraction of trials with a \texttt{missing\_sync\_*} or \texttt{condition\_before\_producer} error); \textbf{mean correction rounds} ($\pm$ std); and \textbf{generation time}. The same five metrics are reported for the baselines (Table~\ref{tab:baselines}); for the non-LLM MRBTP, correction rounds count its reflective-feedback iterations.
+
+\subsection{Results}
+Table~\ref{tab:results} gives the reporting format; entries are populated from repeated trials per condition and scenario. We expect single-shot pure generation to expose the producer-omission failure mode, self-correction and best-of-$N$ to recover a large fraction of it, two-stage generation to further raise goal success on the synchronization-heavy scenario, and the assisted upper bound to bound the residual gap attributable to missing scaffolding.
+
+\begin{table}[!t]
+\renewcommand{\arraystretch}{1.25}
+\caption{Evaluation Format: Validity, Goal Success, Synchronization Error, Correction Rounds, and Time (Per Scenario, Mean over Trials)}
+\label{tab:results}
+\centering
+\footnotesize
+\begin{tabular}{lccccc}
+\toprule
+Condition & Valid & Goal & Sync Err. & Rounds & Time \\
+\midrule
+Pure, single-shot      & -- & -- & -- & 0 & -- \\
+Pure, self-correction  & -- & -- & -- & -- & -- \\
+Pure, best-of-$N$      & -- & -- & -- & -- & -- \\
+Pure, two-stage        & -- & -- & -- & -- & -- \\
+Assisted (upper bound) & -- & -- & -- & -- & -- \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Table~\ref{tab:baselines} reports the external comparison (Section~\ref{sec:baselines}). We expect the flat baseline to expose the producer-omission failure mode most strongly; the hierarchical baseline to recover same-robot mistakes through its loop yet stall on cross-robot dependencies it cannot express; and our method to reach the goal on both scenarios from the instruction alone. MRBTP, although sound and complete, plans by cross-tree back-chaining whose search can fail to scale: in our runs it solves the smaller gear-assembly cell in well under a second, but does not converge on the synchronization-heavy sensor-calibration cell within a $300$\,s budget - precisely the scaling regime that motivates language-driven generation.
+
+\begin{table}[!t]
+\renewcommand{\arraystretch}{1.25}
+\caption{Baseline Comparison: Validity, Goal Success, Synchronization Error, Correction Rounds, and Time (Per Scenario, Mean over Trials)}
+\label{tab:baselines}
+\centering
+\footnotesize
+\begin{tabular}{lccccc}
+\toprule
+Method & Valid & Goal & Sync Err. & Rounds & Time \\
+\midrule
+LLM-MARS-style (flat)        & -- & -- & -- & 0  & -- \\
+LLM-as-BT-Planner-style      & -- & -- & -- & -- & -- \\
+MRBTP \cite{cai2025mrbtp}    & -- & -- & -- & -- & -- \\
+Proposed                     & -- & -- & -- & -- & -- \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+%  -  -  - - VIII. Discussion  -  -  - -
+\section{Discussion}
+The framework keeps a sharp boundary: the LLM owns all plan structure, and the deterministic code only verifies. This makes outputs inspectable (typed errors, an executable trace) and the central claim measurable (pure vs.\ assisted). Pushing synchronization into an explicit, checkable artifact - \pred{Condition} guards plus $Y$-edges, validated against producer add-effects - means inter-robot dependencies are made explicit \emph{before} execution rather than left implicit in independent per-robot plans. The two-stage decomposition reflects a practical observation: separating producer selection from BT encoding attacks the step LLMs most often get wrong without handing the model the answer. The approach depends on the fidelity of the declarative domain and the completeness of the capability library; if effects or preconditions are misspecified, a plan that passes symbolic checks may still fail physically.
+
+%  -  -  - - IX. Limitations  -  -  - -
+\section{Limitations}
+\label{sec:limitations}
+First, planning and verification are symbolic: the validator and simulator check logical executability and inter-robot timing, not low-level motion feasibility, perception uncertainty, grasp success, or continuous geometry. Second, the framework does not yet control real robots; BehaviorTree.CPP XML export and a documented ROS execution-backend scaffold are the seam to hardware, but physical dispatch, perception-backed predicates, and motion planning remain future work. Third, LLM generation is stochastic, so reliability is reported over repeated trials rather than from a single run. Finally, correctness is defined relative to the declarative model; guarantees do not transfer to execution beyond the fidelity of that model.
+
+%  -  -  - - X. Conclusion  -  -  - -
+\section{Conclusion}
+We presented LLM-as-Multi-Robot-BT-Planner, in which an LLM infers the entire plan - task graph, capability-aware assignment, synchronization, and one BT per robot - for a heterogeneous team from a natural-language instruction, while deterministic code only verifies and simulates. A task-agnostic validator and a deadlock-sound tick simulator return structured feedback that drives LLM self-correction, and three domain-independent levers (a back-chaining method, best-of-$N$, and two-stage generation) raise pure-mode reliability without task-specific hints. A controlled pure-vs-assisted ablation isolates how much the LLM achieves alone. Future work will integrate perception-backed predicates, continuous motion feasibility, dynamic replanning, and real-robot execution through the BehaviorTree.CPP/ROS seam.
+
+%  -  -  - - Acknowledgment  -  -  - -
+\section*{Acknowledgment}
+The authors thank the supporting laboratories and collaborators who provided research guidance, robot access, and feedback during the development of this work.
+
+%  -  -  - - References  -  -  - -
+\bibliographystyle{IEEEtran}
+\bibliography{references}
+
+\end{document}

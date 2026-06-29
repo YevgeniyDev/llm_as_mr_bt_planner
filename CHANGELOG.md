@@ -2,10 +2,10 @@
 
 ## 0.2.0
 
-Restructured the single-file prototype into the tested `mrbtp` package.
+Restructured the single-file prototype into the tested `llm_mr_bt_planner` package.
 
 ### Added
-- `mrbtp` package with a clean module split (predicates, domain, bt, plan, validation, simulation,
+- `llm_mr_bt_planner` package with a clean module split (predicates, domain, bt, plan, validation, simulation,
   prompts, planner, llm, execution, experiments, cli).
 - Declarative domain model: explicit `add`/`delete` capability effects with partial/prefix delete
   patterns and wildcards; no naming-convention magic.
@@ -20,12 +20,12 @@ Restructured the single-file prototype into the tested `mrbtp` package.
   feedback (`--feedback rich`) as an ablation baseline. `--max-corrections 0` selects single-shot generation.
 - Reproducible multi-trial experiment runner with metrics and CSV/Markdown/JSON exporters; each report records
   its mode (pure/assisted) and correction budget.
-- Behavior Tree visualization (`mrbtp.viz`): a self-contained HTML report (`run --viz <path.html>`) with a
+- Behavior Tree visualization (`llm_mr_bt_planner.viz`): a self-contained HTML report (`run --viz <path.html>`) with a
   **Behavior Trees** tab (per-robot Mermaid `flowchart` diagrams; `bt_to_mermaid` returns the raw definition)
   and an **Action Plan** tab — a chronological table of every robot's BT node in execution order, with tick,
   effects, and synchronization waits, built from the simulation trace.
 - Engine-only `pytest` suite (deterministic, LLM-free); `pyproject.toml` with packaging and ruff/mypy config.
-- `mrbtp` console script and `python -m mrbtp` with `run` / `experiment` subcommands.
+- `lmrbtp` console script and `python -m llm_mr_bt_planner` with `run` / `experiment` subcommands.
 
 ### Changed
 - Pure-mode reliability improvements (no task-specific hints): the prompt now includes a general,

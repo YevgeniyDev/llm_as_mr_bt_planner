@@ -4,7 +4,7 @@ import warnings
 
 import pytest
 
-from mrbtp.domain import (
+from llm_mr_bt_planner.domain import (
     Effects,
     ScenarioError,
     apply_grounded,

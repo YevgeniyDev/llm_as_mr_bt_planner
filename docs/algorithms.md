@@ -1,6 +1,6 @@
 # Algorithms (full LLM-driven planning)
 
-A paper-ready, notation-level description of the method implemented in `mrbtp`. The stance is
+A paper-ready, notation-level description of the method implemented in `llm_mr_bt_planner`. The stance is
 **LLM-as-planner**: all plan *structure* is produced by the language model; the deterministic code only
 **verifies** (`validation`) and **simulates** (`simulation`). There is no symbolic back-chaining or
 deterministic repair on the critical path.

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from mrbtp.execution import SymbolicExecutionBackend, get_backend
+from llm_mr_bt_planner.execution import SymbolicExecutionBackend, get_backend
 
 
 def test_symbolic_backend_runs_a_correct_plan(toy_scenario, toy_plan):

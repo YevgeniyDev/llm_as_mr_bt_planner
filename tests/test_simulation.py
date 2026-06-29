@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from mrbtp.domain import parse_scenario
-from mrbtp.plan import parse_plan
-from mrbtp.simulation import simulate
+from llm_mr_bt_planner.domain import parse_scenario
+from llm_mr_bt_planner.plan import parse_plan
+from llm_mr_bt_planner.simulation import simulate
 
 
 def _toy_scenario():

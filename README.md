@@ -50,7 +50,7 @@ tick-based simulation, and the static validator) is in [`docs/algorithms.md`](do
 ## Layout
 
 ```
-src/mrbtp/
+src/llm_mr_bt_planner/
   predicates.py     parse/format/substitute/match/unify over name(arg, ...) facts
   domain.py         Scenario/Robot/Capability/Effects dataclasses, loading, world-state semantics
   bt.py             Behavior Tree node model (Sequence/Fallback/Parallel/Action/Condition)
@@ -82,8 +82,8 @@ copy .env.example .env      # add OPENAI_API_KEY (or ANTHROPIC_API_KEY)
 Single run. The result file defaults to `outputs/run-<scenario>.json`, so different scenarios don't overwrite each other:
 
 ```powershell
-python -m mrbtp run --scenario data/scenario.json                  # -> outputs/run-scenario.json
-python -m mrbtp run --scenario data/scenario2.json --model gpt-4o  # -> outputs/run-scenario2.json
+python -m llm_mr_bt_planner run --scenario data/scenario.json                  # -> outputs/run-scenario.json
+python -m llm_mr_bt_planner run --scenario data/scenario2.json --model gpt-4o  # -> outputs/run-scenario2.json
 ```
 
 > **Provider:** commands below use OpenAI (the default). Anthropic is also supported — add `--provider anthropic` (e.g. `--provider anthropic --model claude-opus-4-8`); runs also fall back to Anthropic automatically if `OPENAI_API_KEY` is unset.
@@ -99,7 +99,7 @@ Pure mode is harder for the model (it must infer the whole producer chain itself
   the step models most often get wrong (choosing/ordering the producer actions) from the BT-encoding step.
 
 ```powershell
-python -m mrbtp run --scenario data/scenario.json --two-stage --samples 4 --temperature 0.7
+python -m llm_mr_bt_planner run --scenario data/scenario.json --two-stage --samples 4 --temperature 0.7
 ```
 
 (`--temperature` sets the OpenAI sampling temperature; raise it so best-of-N produces diverse candidates.)
@@ -107,7 +107,7 @@ python -m mrbtp run --scenario data/scenario.json --two-stage --samples 4 --temp
 Export the generated trees to BehaviorTree.CPP XML for a real executor:
 
 ```powershell
-python -m mrbtp run --scenario data/scenario.json --export-bt outputs/plan.xml
+python -m llm_mr_bt_planner run --scenario data/scenario.json --export-bt outputs/plan.xml
 ```
 
 Visualize the plan as a self-contained HTML report (Mermaid; opens in a browser, no install) with two tabs:
@@ -115,16 +115,16 @@ a **Behavior Trees** view (Actions as stadiums, Conditions as hexagons, composit
 **Action Plan** view — a chronological table of every robot's BT node as it fires (with tick, robot, node, effects, and synchronization waits):
 
 ```powershell
-python -m mrbtp run --scenario data/scenario.json --viz outputs/trees.html
+python -m llm_mr_bt_planner run --scenario data/scenario.json --viz outputs/trees.html
 ```
 
-`mrbtp.viz.bt_to_mermaid(tree)` also returns the raw Mermaid definition for pasting into GitHub Markdown or
+`llm_mr_bt_planner.viz.bt_to_mermaid(tree)` also returns the raw Mermaid definition for pasting into GitHub Markdown or
 https://mermaid.live.
 
 Reproducible experiment across scenarios and trials, with a results table:
 
 ```powershell
-python -m mrbtp experiment --scenario data/scenario.json --scenario data/scenario2.json `
+python -m llm_mr_bt_planner experiment --scenario data/scenario.json --scenario data/scenario2.json `
     --trials 5 --csv outputs/results.csv --markdown outputs/results.md
 ```
 
@@ -133,6 +133,53 @@ Run the engine tests (deterministic, no API key, no LLM):
 ```powershell
 python -m pytest
 ```
+
+## Baselines
+
+The same `experiment` command evaluates competing methods via `--method`, all scored by the **same**
+validator + simulator on the same scenarios so the comparison is apples-to-apples:
+
+```powershell
+python -m llm_mr_bt_planner experiment --method proposed --scenario data/scenario.json --scenario data/scenario2.json --trials 5 --markdown outputs/cmp_proposed.md
+python -m llm_mr_bt_planner experiment --method flat     --scenario data/scenario.json --scenario data/scenario2.json --trials 5 --markdown outputs/cmp_flat.md
+python -m llm_mr_bt_planner experiment --method hier     --scenario data/scenario.json --scenario data/scenario2.json --trials 5 --markdown outputs/cmp_hier.md
+```
+
+- `proposed` — this work (LLM is the planner; full verifier loop, synchronization, levers).
+- `flat` — *LLM-MARS-style*: single-shot, one BT per robot, no synchronization machinery, no self-correction.
+- `hier` — *LLM-as-BT-Planner-style*: hierarchical decompose → per-robot BTs → recursive self-correction,
+  but robots planned independently (no inter-robot synchronization).
+- `mrbtp` — *MRBTP* (Cai et al. 2025) run from the authors' code; see `scripts/run_mrbtp.py` and
+  `third_party/MRBTP`. Not LLM-driven, so it needs no API key; it ingests `outputs/mrbtp_results.json`.
+
+The two LLM baselines use the same base model as `proposed` (set via `--provider`/`--model`) and are
+faithful re-implementations of the published strategies adapted to these scenarios.
+
+### Running the MRBTP baseline (authors' code)
+
+MRBTP is symbolic and lives in its own dependency stack, so it runs out-of-process in a Python 3.10
+environment, then its results are ingested:
+
+```powershell
+git clone https://github.com/DIDS-EI/MRBTP third_party/MRBTP   # already cloned in this repo layout
+conda create -n mrbtp python=3.10 -y
+conda run -n mrbtp pip install -e third_party/MRBTP
+# MRBTP's generated ANTLR parser needs the matching runtime (hydra pins an older one):
+conda run -n mrbtp pip install "antlr4-python3-runtime==4.13.1"
+# Port our scenarios -> run MRBTP -> write outputs/mrbtp_results.json (--time-limit secs/scenario):
+conda run -n mrbtp python scripts/run_mrbtp.py --scenario data/scenario.json --scenario data/scenario2.json --time-limit 300
+# Ingest + re-score under our validator/simulator, into the comparison table:
+python -m llm_mr_bt_planner experiment --method mrbtp --scenario data/scenario.json --scenario data/scenario2.json
+```
+
+`scripts/run_mrbtp.py` ports each scenario into MRBTP's ground `PlanningAction` form
+(`baselines/mrbtp_port.py`, with delete-relaxation reachability pruning), runs `MAOBTP`, and reports
+MRBTP's **native** metrics. MRBTP uses standard reactive BT semantics (a Condition returns
+SUCCESS/FAILURE), which is incompatible with our blocking-guard simulator (Condition returns RUNNING for
+synchronization), so its trees are **not** re-scored by our simulator; instead, since MRBTP is sound and
+complete, goal-success is taken from whether it found a plan within the time budget (it sets a timeout
+marker otherwise). `mrbtp_bt_to_plan` (`baselines/mrbtp_adapter.py`) converts its `AnyTreeNode` trees to
+our Plan JSON for inspection/visualization.
 
 ## Research design: pure vs assisted
 
@@ -151,10 +198,10 @@ on — they are task-agnostic verification, not planning, and define what "worki
 
 ```powershell
 # Pure, single-shot vs pure, with self-correction:
-python -m mrbtp experiment --scenario data/scenario.json --trials 10 --max-corrections 0 --csv outputs/pure_oneshot.csv
-python -m mrbtp experiment --scenario data/scenario.json --trials 10 --max-corrections 4 --csv outputs/pure_corrected.csv
+python -m llm_mr_bt_planner experiment --scenario data/scenario.json --trials 10 --max-corrections 0 --csv outputs/pure_oneshot.csv
+python -m llm_mr_bt_planner experiment --scenario data/scenario.json --trials 10 --max-corrections 4 --csv outputs/pure_corrected.csv
 # Assisted baseline (how much do hints/suggestions help?):
-python -m mrbtp experiment --scenario data/scenario.json --trials 10 --hints full --feedback rich --csv outputs/assisted.csv
+python -m llm_mr_bt_planner experiment --scenario data/scenario.json --trials 10 --hints full --feedback rich --csv outputs/assisted.csv
 ```
 
 Every experiment JSON records its `mode`, `include_hints`, `suggest_producers`, and `max_corrections` for
@@ -180,7 +227,7 @@ preconditions and effects.
 ## Real-robot path
 
 The simulator is deliberately small so generated BT structure stays inspectable before the execution backend
-is upgraded. The seam for hardware is `mrbtp.execution`: implement `ExecutionBackend` (or fill in
+is upgraded. The seam for hardware is `llm_mr_bt_planner.execution`: implement `ExecutionBackend` (or fill in
 `RosExecutionBackend`) to dispatch the same trees — `export_behaviortree_cpp_xml(plan)` already emits the
 BehaviorTree.CPP / py_trees-compatible XML. This framework does not yet control real robots, ROS nodes,
 perception, motion planning, continuous geometry, collision checking, or real-time execution.

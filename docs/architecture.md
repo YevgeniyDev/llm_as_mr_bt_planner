@@ -1,6 +1,6 @@
 # Architecture & design notes
 
-This document explains the design decisions behind `mrbtp`, with an eye toward scientific
+This document explains the design decisions behind `llm_mr_bt_planner`, with an eye toward scientific
 reproducibility and an eventual real-robot backend.
 
 ## Data flow
@@ -133,7 +133,7 @@ default path.
 The automated test suite is **engine-only**: it exercises the deterministic parser, validator, simulator, and
 visualizer with no LLM. Positive cases use a tiny inline two-robot domain that is known to be valid and to
 simulate to success (`tests/conftest.py`). Planner *quality* — whether the LLM produces working plans — is not
-asserted in unit tests; it is measured by real LLM runs via `mrbtp experiment`. The default provider is OpenAI,
+asserted in unit tests; it is measured by real LLM runs via `llm_mr_bt_planner experiment`. The default provider is OpenAI,
 with automatic fallback to Anthropic when `OPENAI_API_KEY` is absent.
 
 ## Toward real robots

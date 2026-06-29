@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from mrbtp.simulation import simulate
-from mrbtp.viz import bt_to_mermaid, plan_to_html
+from llm_mr_bt_planner.simulation import simulate
+from llm_mr_bt_planner.viz import bt_to_mermaid, plan_to_html
 
 
 def test_bt_to_mermaid_shapes(toy_plan):

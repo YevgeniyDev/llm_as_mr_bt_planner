@@ -23,3 +23,6 @@ outputs/
 build/
 dist/
 *.egg-info/
+
+# External baseline code (cloned, not vendored)
+third_party/

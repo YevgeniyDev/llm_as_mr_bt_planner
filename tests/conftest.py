@@ -12,8 +12,8 @@ from pathlib import Path
 
 import pytest
 
-from mrbtp.domain import Scenario, load_scenario, parse_scenario
-from mrbtp.plan import Plan, parse_plan
+from llm_mr_bt_planner.domain import Scenario, load_scenario, parse_scenario
+from llm_mr_bt_planner.plan import Plan, parse_plan
 
 DATA = Path(__file__).resolve().parents[1] / "data"
 

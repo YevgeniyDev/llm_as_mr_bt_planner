@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from mrbtp.predicates import (
+from llm_mr_bt_planner.predicates import (
     format_predicate,
     matches_pattern,
     parse_predicate,
