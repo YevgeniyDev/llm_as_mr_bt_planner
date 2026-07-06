@@ -130,15 +130,72 @@ default path.
 
 ### Testing stance
 
-The automated test suite is **engine-only**: it exercises the deterministic parser, validator, simulator, and
-visualizer with no LLM. Positive cases use a tiny inline two-robot domain that is known to be valid and to
-simulate to success (`tests/conftest.py`). Planner *quality* — whether the LLM produces working plans — is not
-asserted in unit tests; it is measured by real LLM runs via `llm_mr_bt_planner experiment`. The default provider is OpenAI,
+The automated test suite is **engine-only**: it exercises the deterministic parser, validator, simulator,
+visualizer, execution-time recovery ladder (`tests/test_recovery.py`, via a deterministic failure oracle),
+and Markdown skill loader (`tests/test_skills.py`) with no LLM. The MuJoCo tests (`tests/test_execution.py`)
+run real physics but `pytest.importorskip("mujoco")` and skip gracefully when the extra or the menagerie is
+absent. Positive cases use a tiny inline two-robot domain known to be valid and to simulate to success
+(`tests/conftest.py`). Planner *quality* — whether the LLM produces working plans — is not asserted in unit
+tests; it is measured by real LLM runs via `llm_mr_bt_planner experiment`. The default provider is OpenAI,
 with automatic fallback to Anthropic when `OPENAI_API_KEY` is absent.
+
+## Execution-time recovery ladder (retry → reassign)
+
+The self-correction loop above is **planning-time**: it repairs the whole plan with the LLM *before*
+execution. `recovery.RecoveryController` is a separate, complementary **execution-time** mechanism that
+reacts to failures *during* execution, with no LLM. Keep the two distinct.
+
+- **Failure detection.** `simulation.simulate` accepts an optional `action_oracle(event) → Status`, called
+  for each precondition-satisfied action *before* its effects commit. Returning `FAILURE` makes the action
+  fail at runtime (effects not applied, leaf returns `FAILURE`, recorded in `SimulationReport.failures`).
+  With no oracle, behavior is byte-for-byte the pure symbolic run. The oracle runs *before* `on_action` so
+  no effect rollback is ever needed. Oracles: a deterministic `InjectedFailureOracle` (fail an action its
+  first *k* executions — the tally is persistent+monotonic so re-running an episode never re-fails a
+  budget-exhausted action) and a seeded `StochasticFailureOracle`. A MuJoCo physics oracle is future work.
+- **Tier 1 — retry, same robot.** On failure the controller re-runs the episode; because the oracle tally is
+  monotonic, the action succeeds once its failure budget is spent. Up to `max_retries` per action.
+- **Tier 2 — reassign, another robot.** When retries are exhausted it picks another robot whose capability
+  produces the failed action's add-effect (reusing `domain.candidate_producers`), rewrites the plan clone
+  (remove the failed leaf, front-load the producer on the new robot), and re-runs. Robot-scoped predicates
+  like `holding(R, x)` have no other producer, so those correctly surface as `unrecovered_failure`.
+
+Re-running whole episodes (rather than mutating a live tick) is deliberate: node memories are keyed by
+`id(node)` and per-robot `done` latches, so replaying a mutated plan is both simpler and reuses the exact
+seam `simulate` already exposes. Termination is bounded by retries × capable-robots × `max_episodes`. The
+`SymbolicExecutionBackend` takes an optional `recovery=RecoveryController(...)` and folds the ladder timeline
+into `ExecutionResult.details["recovery"]`. Driving the ladder from a MuJoCo physics oracle is on the roadmap
+(the `action_oracle` seam already exists; see `docs/roadmap.md`).
+
+## Markdown-authored skills
+
+`skills.py` loads `skills/*.md` files (frontmatter `name`/`description`/`tags`/`applies_to` + a guidance
+body), parsed with a stdlib-only frontmatter reader (no PyYAML). `select_skills` keeps those relevant to a
+scenario (`applies_to: "*"`, a capability/robot-name match, or a tag match), and `render_skills_section`
+renders them into a prompt block that `prompts.build_prompt` (and the two-stage/correction builders) insert
+between the scenario context and the output schema. This is opt-in prompt engineering: the load-bearing
+`_RULES`/`_METHOD` stay in `prompts.py` (always on), while skills are **additive and off by default** so the
+pure-mode baseline the experiments depend on is never silently changed.
+
+## Execution backends and physics (MuJoCo)
+
+`execution.get_backend(name, **kwargs)` returns a backend implementing the `ExecutionBackend` protocol:
+
+- **`symbolic`** — the in-process tick simulator (the fast, deterministic inner loop), optionally wrapped
+  with the recovery ladder.
+- **`mujoco`** — replays the *same* behavior trees on real `mujoco_menagerie` robots, driving physics from
+  the symbolic tick via the `on_action` hook so synchronization/deadlock/goal semantics stay identical.
+  Two fidelities: `settle` (Stage 1, scripted teleport + gravity settle) and `ik` (Stage 2, `mink`
+  differential IK reaching + kinematic carry). Imported lazily so the package never hard-depends on the
+  optional `mujoco` extra (`mujoco` + `mink` + `qpsolvers[daqp]`). Goal success is still the symbolic tick's
+  — physics is embodiment + a per-action trace, not yet a success oracle. Grasping is a kinematic snap; the
+  scene's grasp welds and drawer actuator are declared but inactive (see `docs/roadmap.md`).
+- **`ros`** — a documented BehaviorTree.CPP/ROS scaffold (`export_behaviortree_cpp_xml` + a
+  `RosExecutionBackend` that raises with wiring guidance).
 
 ## Toward real robots
 
-Everything downstream of plan generation already speaks to `execution.ExecutionBackend`. To run on hardware:
+Everything downstream of plan generation already speaks to `execution.ExecutionBackend`, and the MuJoCo
+backend already exercises the trees in physics on real robot models. To run on hardware:
 
 1. Implement an action/skill server per capability (the leaf `name` selects it; `parameters` are the goal).
 2. Back the symbolic predicates with a blackboard updated by perception/condition monitors.

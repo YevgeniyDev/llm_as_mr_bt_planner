@@ -130,15 +130,15 @@ def _scenario_context(scenario: Scenario, include_hints: bool) -> str:
     return "\n".join(parts)
 
 
-def build_prompt(scenario: Scenario, include_hints: bool = False) -> str:
+def build_prompt(scenario: Scenario, include_hints: bool = False, skills_section: str = "") -> str:
     parts = [
         "Generate a compact symbolic multi-robot behavior-tree plan for the scenario below.\n"
         "Return ONLY valid JSON. Do not use markdown or explanatory text.\n",
         _scenario_context(scenario, include_hints),
-        _SCHEMA,
-        _RULES,
-        _METHOD,
     ]
+    if skills_section:
+        parts.append(skills_section)
+    parts += [_SCHEMA, _RULES, _METHOD]
     if include_hints:
         parts.append(_HINTS_INSTRUCTION)
     return "\n".join(parts)
@@ -150,12 +150,13 @@ def build_correction_prompt(
     simulation: SimulationReport,
     previous_plan: dict[str, Any] | None = None,
     include_hints: bool = False,
+    skills_section: str = "",
 ) -> str:
     previous_block = ""
     if previous_plan is not None:
         previous_block = f"Previous plan that failed (start from this and fix it):\n{json.dumps(previous_plan, indent=2)}\n\n"
     return (
-        f"{build_prompt(scenario, include_hints=include_hints)}\n\n"
+        f"{build_prompt(scenario, include_hints=include_hints, skills_section=skills_section)}\n\n"
         f"{previous_block}"
         "The previous JSON plan failed validation or simulation. Return a COMPLETE corrected plan.\n"
         "Keep the parts of the previous plan that are already correct; change only what the errors below require, "
@@ -202,13 +203,19 @@ _ACTION_PLAN_SCHEMA = """Required output schema (action plan only - NO behavior 
 """
 
 
-def build_action_plan_prompt(scenario: Scenario, include_hints: bool = False) -> str:
+def build_action_plan_prompt(
+    scenario: Scenario, include_hints: bool = False, skills_section: str = ""
+) -> str:
     """Stage 1: ask only for the ordered list of actions each robot performs."""
     parts = [
         "Plan a multi-robot task. In this FIRST stage, output only the ordered list of actions each robot\n"
         "performs - no behavior-tree structure, no Condition nodes, no synchronization yet.\n"
         "Return ONLY valid JSON. Do not use markdown or explanatory text.\n",
         _scenario_context(scenario, include_hints),
+    ]
+    if skills_section:
+        parts.append(skills_section)
+    parts += [
         _ACTION_PLAN_SCHEMA,
         "Rules:\n"
         "1. Use only the action and object/location names from the capability library.\n"
@@ -229,9 +236,11 @@ def build_action_plan_correction_prompt(
     simulation: SimulationReport,
     previous_action_plan: dict[str, Any],
     include_hints: bool = False,
+    skills_section: str = "",
 ) -> str:
+    base = build_action_plan_prompt(scenario, include_hints=include_hints, skills_section=skills_section)
     return (
-        f"{build_action_plan_prompt(scenario, include_hints=include_hints)}\n\n"
+        f"{base}\n\n"
         f"Previous action plan that failed (start from this and fix it):\n"
         f"{json.dumps({'action_plan': previous_action_plan}, indent=2)}\n\n"
         "The action plan was checked by running each robot's actions in order (an action waits until its\n"
@@ -248,12 +257,15 @@ def build_bt_encoding_prompt(
     scenario: Scenario,
     action_plan: dict[str, Any],
     include_hints: bool = False,
+    skills_section: str = "",
 ) -> str:
     """Stage 2: wrap a fixed, feasible action plan into behavior trees + synchronization."""
+    skills_block = f"{skills_section}\n" if skills_section else ""
     return (
         "Encode the given multi-robot action plan as behavior trees with explicit synchronization.\n"
         "Return ONLY valid JSON. Do not use markdown or explanatory text.\n\n"
         f"{_scenario_context(scenario, include_hints)}\n"
+        f"{skills_block}"
         f"Fixed action plan (use these exact actions, per robot, in this order):\n"
         f"{json.dumps({'action_plan': action_plan}, indent=2)}\n\n"
         f"{_SCHEMA}\n"
@@ -278,9 +290,13 @@ def build_bt_encoding_correction_prompt(
     previous_plan: dict[str, Any],
     action_plan: dict[str, Any],
     include_hints: bool = False,
+    skills_section: str = "",
 ) -> str:
+    base = build_bt_encoding_prompt(
+        scenario, action_plan, include_hints=include_hints, skills_section=skills_section
+    )
     return (
-        f"{build_bt_encoding_prompt(scenario, action_plan, include_hints=include_hints)}\n\n"
+        f"{base}\n\n"
         f"Previous plan that failed (fix it; keep the same actions per robot):\n{json.dumps(previous_plan, indent=2)}\n\n"
         "Keep each robot's actions exactly as in the action plan. Fix only the behavior-tree structure,\n"
         "Condition placement, synchronization, task_graph, and assignments per the errors below.\n\n"

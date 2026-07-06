@@ -10,11 +10,13 @@ export and for tabulation in a paper.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Callable
 
 from ..domain import Scenario
 from ..llm.base import LLMClient
 from ..planner import PlannerResult, run_planner
+from ..skills import skills_section_for
 
 
 @dataclass
@@ -71,6 +73,7 @@ def run_experiment(
     suggest_producers: bool = False,
     samples: int = 1,
     two_stage: bool = False,
+    skills_dir: str | Path | None = None,
     on_trial: Callable[[TrialRecord], None] | None = None,
     runner: Callable[..., PlannerResult] = run_planner,
     method: str = "proposed",
@@ -94,17 +97,21 @@ def run_experiment(
             "suggest_producers": suggest_producers,
             "samples": samples,
             "two_stage": two_stage,
+            "skills": skills_dir is not None,
             "mode": "assisted" if (include_hints or suggest_producers) else "pure",
             "scenarios": [s.task_id for s in scenarios],
         }
     )
     for scenario in scenarios:
+        # Skills are selected per-scenario (guidance relevant to its capabilities);
+        # only the proposed method's prompts use it - baseline runners ignore it.
+        skills_section = skills_section_for(scenario, skills_dir) if skills_dir else ""
         for trial in range(1, trials + 1):
             result = runner(
                 scenario, client,
                 max_corrections=max_corrections, max_ticks=max_ticks,
                 include_hints=include_hints, suggest_producers=suggest_producers,
-                samples=samples, two_stage=two_stage,
+                samples=samples, two_stage=two_stage, skills_section=skills_section,
             )
             record = TrialRecord(
                 scenario=scenario.task_id,

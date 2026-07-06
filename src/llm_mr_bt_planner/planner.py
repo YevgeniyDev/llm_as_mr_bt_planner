@@ -62,6 +62,7 @@ def run_planner(
     suggest_producers: bool = False,
     samples: int = 1,
     two_stage: bool = False,
+    skills_section: str = "",
 ) -> PlannerResult:
     """Run Algorithm 1.
 
@@ -73,7 +74,10 @@ def run_planner(
     generation: the LLM first emits an ordered per-robot action plan (validated
     on its own by running it as condition-free sequences), then encodes that
     fixed action plan into behavior trees with explicit synchronization. Set
-    ``max_corrections=0`` for single-shot generation.
+    ``max_corrections=0`` for single-shot generation. ``skills_section`` is an
+    optional pre-rendered block of Markdown-authored planning guidance (see
+    :mod:`llm_mr_bt_planner.skills`) injected into every generation/correction
+    prompt; empty by default so pure-mode prompts are unchanged.
     """
     start = time.monotonic()
     generate = _two_stage_generate if two_stage else _generate_evaluated
@@ -81,6 +85,7 @@ def run_planner(
         scenario, client,
         max_corrections=max_corrections, max_ticks=max_ticks,
         include_hints=include_hints, suggest_producers=suggest_producers, samples=samples,
+        skills_section=skills_section,
     )
     return PlannerResult(
         task_id=scenario.task_id,
@@ -109,8 +114,9 @@ def _generate_evaluated(
     include_hints: bool,
     suggest_producers: bool,
     samples: int,
+    skills_section: str = "",
 ) -> tuple[Plan, ValidationReport, SimulationReport, int]:
-    prompt = build_prompt(scenario, include_hints=include_hints)
+    prompt = build_prompt(scenario, include_hints=include_hints, skills_section=skills_section)
     plan, validation, simulation = _generate_best(
         client, prompt, scenario, samples, max_ticks, suggest_producers
     )
@@ -120,7 +126,7 @@ def _generate_evaluated(
         rounds += 1
         correction = build_correction_prompt(
             scenario, validation.to_dicts(), simulation,
-            previous_plan=plan.to_dict(), include_hints=include_hints,
+            previous_plan=plan.to_dict(), include_hints=include_hints, skills_section=skills_section,
         )
         plan, validation, simulation = _generate_best(
             client, correction, scenario, samples, max_ticks, suggest_producers
@@ -177,17 +183,19 @@ def _two_stage_generate(
     include_hints: bool,
     suggest_producers: bool,
     samples: int,
+    skills_section: str = "",
 ) -> tuple[Plan, ValidationReport, SimulationReport, int]:
     # Stage 1: a feasible, ordered per-robot action plan (no conditions/sync).
     action_plan, validation, simulation = _generate_best_actions(
-        client, build_action_plan_prompt(scenario, include_hints=include_hints),
+        client, build_action_plan_prompt(scenario, include_hints=include_hints, skills_section=skills_section),
         scenario, samples, max_ticks, suggest_producers,
     )
     rounds = 0
     while rounds < max_corrections and not (validation.valid and simulation.success):
         rounds += 1
         prompt = build_action_plan_correction_prompt(
-            scenario, validation.to_dicts(), simulation, action_plan, include_hints=include_hints
+            scenario, validation.to_dicts(), simulation, action_plan,
+            include_hints=include_hints, skills_section=skills_section,
         )
         action_plan, validation, simulation = _generate_best_actions(
             client, prompt, scenario, samples, max_ticks, suggest_producers
@@ -195,13 +203,15 @@ def _two_stage_generate(
 
     # Stage 2: encode the fixed action plan as behavior trees with synchronization.
     plan, validation, simulation = _generate_best(
-        client, build_bt_encoding_prompt(scenario, action_plan, include_hints=include_hints),
+        client, build_bt_encoding_prompt(scenario, action_plan, include_hints=include_hints,
+                                         skills_section=skills_section),
         scenario, samples, max_ticks, suggest_producers,
     )
     while rounds < 2 * max_corrections and not (validation.valid and simulation.success):
         rounds += 1
         prompt = build_bt_encoding_correction_prompt(
-            scenario, validation.to_dicts(), simulation, plan.to_dict(), action_plan, include_hints=include_hints
+            scenario, validation.to_dicts(), simulation, plan.to_dict(), action_plan,
+            include_hints=include_hints, skills_section=skills_section,
         )
         plan, validation, simulation = _generate_best(
             client, prompt, scenario, samples, max_ticks, suggest_producers

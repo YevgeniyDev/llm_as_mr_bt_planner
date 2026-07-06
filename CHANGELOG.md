@@ -1,5 +1,77 @@
 # Changelog
 
+## Unreleased
+
+### Added — execution-time recovery ladder (failure detection → retry → reassign)
+- New `recovery.py`: a `RecoveryController` that reacts to *runtime* action failures, distinct from the
+  existing planning-time LLM self-correction. **Tier 1** retries a failed action on the same robot
+  (`--max-retries`), then **Tier 2** reassigns it to another robot whose capability produces the same
+  predicate (via `domain.candidate_producers`), rewriting the plan and re-running. No LLM involved.
+- `simulation.simulate` gains an optional `action_oracle(event) → Status` seam (checked before effects
+  commit) and reports `SimulationReport.failures`; with no oracle, behavior is byte-for-byte unchanged.
+- Pluggable oracles: a deterministic `InjectedFailureOracle` (persistent, monotonic attempt tally) and a
+  seeded `StochasticFailureOracle`, so the whole ladder is reproducible with no LLM and no physics.
+- `SymbolicExecutionBackend` accepts `recovery=`; the ladder timeline lands in
+  `ExecutionResult.details["recovery"]`. New `run` flags: `--recovery`, `--max-retries`, `--reassign`,
+  `--inject-failures`, `--fail-prob`/`--fail-seed`. New `tests/test_recovery.py`. (Driving the ladder from a
+  real MuJoCo physics oracle is on the roadmap; the tick-engine `action_oracle` seam is already in place.)
+
+### Added — Markdown-authored planning skills
+- New `skills.py` + `skills/` directory: reusable planning guidance authored as `*.md` files (frontmatter +
+  body), parsed with the standard library only (no PyYAML), selected per scenario, and injected into the LLM
+  prompt between the scenario context and the output schema. Off by default so the pure-mode baseline is
+  unchanged. New `--skills`/`--skills-dir` flags on `run` and `experiment`; the experiment config records
+  `skills`. New `tests/test_skills.py`.
+
+### Changed — documentation & comment reconciliation
+- Documented the MuJoCo backend, the recovery ladder, and skills in `README.md` and `docs/architecture.md`;
+  refreshed the `pyproject` description and the `execution/__init__` docstring (were "symbolic + ROS scaffold
+  only"). Added `docs/roadmap.md` (future-implementations plan).
+- Fixed misleading in-code comments in `mujoco_backend.py` (an `ik` step mislabeled "Stage 3"; a claim that
+  grasped parts are held by weld constraints — they are re-snapped kinematically, the welds are inactive) and
+  marked the superseded `mujoco_ik.py` as legacy (the `ik` fidelity runs through the `mink` `ArmController`).
+
+### Changed — mink-based manipulation ("ik" fidelity)
+- Rebuilt inverse kinematics on **[mink](https://github.com/kevinzakka/mink)**, a
+  differential-IK library that solves each step as a quadratic program. This
+  replaces the hand-rolled Jacobian solver and provides, from a well-tested
+  implementation:
+  - a **frame task** (position + orientation) that keeps each gripper pointed
+    straight down,
+  - a **posture task** that regularises the arm to a natural configuration,
+  - **configuration limits** (joints stay in range), and
+  - **collision avoidance between the arms** -- so the manipulators no longer
+    drive through one another when reaching a shared workspace.
+- mink produces a smooth, collision-free trajectory that is applied kinematically,
+  so the whole team stays deterministic and stable (nothing flings, tips, or falls
+  through the table). Verified over the full gear plan: minimum arm-to-arm distance
+  stays >= 0 (no penetration), dog tilt stays 0 degrees, and every part ends resting
+  on the table.
+- The Panda fingers and the Z1 jaw close on the part on grasp and open on release;
+  a held part is carried rigidly with the gripper (no teleporting).
+- Arms are mounted on pedestals above the table so a top-down grasp is comfortably
+  in reach. mink is added to the ``mujoco`` optional dependency group.
+
+### Improved — MuJoCo scene realism
+- Rebuilt the MuJoCo workcell to look like a believable assembly cell: checker floor + skybox,
+  a legged work table, PBR-style materials (brushed steel, brass, painted plastics, rubber),
+  and a three-light rig with shadows.
+- Shaped parts instead of primitive blocks: a 12-tooth brass gear with hub/spokes/bore, a
+  precision steel shaft, a red-handled screwdriver with steel shank + tip, a walled parts tray,
+  and a machined gearbase with bolt heads. Parts are laid out on a spaced front arc so nothing
+  overlaps and everything rests flat on the table.
+- Robots posed in a natural "ready" stance and spread on a wider ring so the arms no longer
+  tangle; the Z1 now rides on the Go2's back. Actuators hold the posed configuration while
+  physics settles, so arms don't sag during replay.
+- The parts drawer is now a cabinet carcass + sliding drawer (contrasting face + handle).
+- Silenced the benign menagerie attach-conflict warnings and enlarged the offscreen framebuffer.
+
+### Added — MuJoCo tests
+- Expanded `tests/test_execution.py` with physics assertions: realistic-asset checks, parts
+  resting flat on the table, drawer open/close, pick-lift/place-down, IK reach + kinematic grasp,
+  and full gear-plan execution in both `settle` and `ik` fidelities.
+
+
 ## 0.2.0
 
 Restructured the single-file prototype into the tested `llm_mr_bt_planner` package.

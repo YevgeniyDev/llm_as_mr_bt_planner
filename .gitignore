@@ -26,3 +26,9 @@ dist/
 
 # External baseline code (cloned, not vendored)
 third_party/
+
+# MuJoCo runtime logs (written next to wherever it runs)
+MUJOCO_LOG.TXT
+
+# Office temp/lock files
+~$*

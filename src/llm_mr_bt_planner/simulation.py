@@ -24,6 +24,7 @@ synchronized round of robot actions.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -40,6 +41,9 @@ class SimulationReport:
     final_state: list[str]
     trace: list[dict[str, Any]]
     errors: list[dict[str, Any]]
+    # Execution-time action failures reported by an ``action_oracle`` (empty in
+    # pure symbolic runs). Consumed by the recovery controller.
+    failures: list[dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -48,6 +52,7 @@ class SimulationReport:
             "final_state": self.final_state,
             "trace": self.trace,
             "errors": self.errors,
+            "failures": self.failures,
         }
 
 
@@ -59,10 +64,40 @@ class _Context:
     trace: list[dict[str, Any]] = field(default_factory=list)
     blocked: dict[str, dict[str, Any]] = field(default_factory=dict)
     action_budget: int = 1
+    on_action: Callable[[dict[str, Any]], None] | None = None
+    action_oracle: Callable[[dict[str, Any]], Status] | None = None
+    failures: list[dict[str, Any]] = field(default_factory=list)
+    failed_this_tick: bool = False
 
 
-def simulate(plan: Plan, scenario: Scenario, max_ticks: int = 80, actions_per_tick: int = 1) -> SimulationReport:
-    ctx = _Context(scenario=scenario, state=set(scenario.initial_state))
+def simulate(
+    plan: Plan,
+    scenario: Scenario,
+    max_ticks: int = 80,
+    actions_per_tick: int = 1,
+    on_action: Callable[[dict[str, Any]], None] | None = None,
+    action_oracle: Callable[[dict[str, Any]], Status] | None = None,
+) -> SimulationReport:
+    """Tick the plan's behavior trees to completion (or deadlock/timeout).
+
+    ``on_action`` is an optional hook invoked once for each action whose effects
+    are successfully applied, receiving the trace event ``{tick, robot, action,
+    parameters, effects, state}``. It lets an execution backend (e.g. MuJoCo)
+    drive physics in lockstep with the symbolic tick without duplicating the
+    tick/sync/deadlock logic. Defaults to ``None`` (pure symbolic behavior).
+
+    ``action_oracle`` is an optional *execution-time failure* hook, called for
+    each action whose preconditions already hold, *before* its effects are
+    committed. Returning :attr:`Status.FAILURE` makes that action fail at runtime
+    (its effects are not applied and the leaf returns FAILURE); any other result
+    (or ``None``) lets it succeed exactly as in a pure symbolic run. This is the
+    seam the recovery controller (retry / reassign) drives; with no oracle,
+    behavior is byte-for-byte identical to before.
+    """
+    ctx = _Context(
+        scenario=scenario, state=set(scenario.initial_state),
+        on_action=on_action, action_oracle=action_oracle,
+    )
     trees = plan.behavior_trees
     memories: dict[str, dict[int, Any]] = {robot: {} for robot in trees}
     done: dict[str, bool] = {robot: False for robot in trees}
@@ -73,6 +108,7 @@ def simulate(plan: Plan, scenario: Scenario, max_ticks: int = 80, actions_per_ti
 
         ctx.tick = tick
         ctx.blocked.clear()
+        ctx.failed_this_tick = False
         snapshot = frozenset(ctx.state)
 
         for robot_id, tree in trees.items():
@@ -85,7 +121,9 @@ def simulate(plan: Plan, scenario: Scenario, max_ticks: int = 80, actions_per_ti
 
         if all(done.values()):
             return _result(ctx, scenario)
-        if frozenset(ctx.state) == snapshot:
+        # A failed action changes no world-state; don't misread that tick as a
+        # deadlock (a real deadlock is an unchanged state with nothing failing).
+        if frozenset(ctx.state) == snapshot and not ctx.failed_this_tick:
             errors = [{"type": "deadlock", "waiting": list(ctx.blocked.values())}]
             return _result(ctx, scenario, errors)
 
@@ -183,17 +221,42 @@ def _tick_action(node: BTNode, robot_id: str, ctx: _Context) -> Status:
         return Status.RUNNING
 
     adds, deletes = ground_effects(capability.effects, bindings)
-    apply_grounded(ctx.state, adds, deletes)
+    event = {
+        "tick": ctx.tick,
+        "robot": robot_id,
+        "event": "action",
+        "action": node.label(),
+        "name": node.name,
+        "parameters": list(node.parameters),
+        "effects": {"add": adds, "delete": deletes},
+    }
     ctx.action_budget -= 1
-    ctx.trace.append(
-        {
-            "tick": ctx.tick,
-            "robot": robot_id,
-            "event": "action",
-            "action": node.label(),
-            "effects": {"add": adds, "delete": deletes},
-        }
-    )
+
+    # Execution-time failure detection: the oracle (if any) decides whether this
+    # precondition-satisfied action actually succeeds when executed. On FAILURE
+    # the effects are NOT applied and the leaf fails; with no oracle every
+    # attempted action succeeds, i.e. pure symbolic behavior.
+    outcome = Status.SUCCESS
+    if ctx.action_oracle is not None:
+        outcome = ctx.action_oracle({**event, "state": sorted(ctx.state)})
+    if outcome is Status.FAILURE:
+        ctx.failures.append(
+            {
+                "tick": ctx.tick,
+                "robot": robot_id,
+                "action": node.label(),
+                "name": node.name,
+                "parameters": list(node.parameters),
+            }
+        )
+        ctx.trace.append({**event, "event": "action_failed"})
+        ctx.failed_this_tick = True
+        return Status.FAILURE
+
+    apply_grounded(ctx.state, adds, deletes)
+    ctx.trace.append(event)
+    if ctx.on_action is not None:
+        ctx.on_action({**event, "state": sorted(ctx.state)})
     return Status.SUCCESS
 
 
@@ -207,7 +270,11 @@ def _tick_condition(node: BTNode, robot_id: str, ctx: _Context) -> Status:
 
 
 def _result(ctx: _Context, scenario: Scenario, errors: list[dict[str, Any]] | None = None) -> SimulationReport:
-    errors = errors or []
+    errors = list(errors or [])
+    # An execution-time action failure makes the run unsuccessful regardless of
+    # how the tick loop terminated; surface the first one at the front.
+    if ctx.failures and not any(error.get("type") == "action_failure" for error in errors):
+        errors.insert(0, {"type": "action_failure", **ctx.failures[0]})
     goal_success = all(goal in ctx.state for goal in scenario.goal_state)
     return SimulationReport(
         success=not errors and goal_success,
@@ -215,6 +282,7 @@ def _result(ctx: _Context, scenario: Scenario, errors: list[dict[str, Any]] | No
         final_state=sorted(ctx.state),
         trace=ctx.trace,
         errors=errors,
+        failures=list(ctx.failures),
     )
 
 

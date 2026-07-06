@@ -8,12 +8,19 @@ from __future__ import annotations
 
 import json
 import os
+import re
+import time
 import urllib.error
 import urllib.request
 
 from .base import LLMError, redact_secrets
 
 DEFAULT_MODEL = "gpt-4o"
+
+# Bounded retry for transient errors (rate limits / 5xx). Stays dependency-free.
+RETRY_STATUSES = {429, 500, 502, 503, 504}
+MAX_RETRIES = int(os.environ.get("OPENAI_MAX_RETRIES", "6"))
+_RETRY_HINT = re.compile(r"try again in ([0-9.]+)s")
 
 
 class OpenAIClient:
@@ -65,11 +72,31 @@ class OpenAIClient:
 
 
 def _send(request: urllib.request.Request, timeout: float) -> str:
-    try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            return response.read().decode("utf-8")
-    except urllib.error.HTTPError as error:
-        detail = error.read().decode("utf-8", errors="replace")
-        raise LLMError(f"LLM request failed: HTTP {error.code}: {redact_secrets(detail)}") from error
-    except urllib.error.URLError as error:
-        raise LLMError(f"LLM request failed: {redact_secrets(str(error.reason))}") from error
+    for attempt in range(MAX_RETRIES + 1):
+        try:
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                return response.read().decode("utf-8")
+        except urllib.error.HTTPError as error:
+            detail = error.read().decode("utf-8", errors="replace")
+            if error.code in RETRY_STATUSES and attempt < MAX_RETRIES:
+                time.sleep(_retry_after(error, detail, attempt))
+                continue
+            raise LLMError(f"LLM request failed: HTTP {error.code}: {redact_secrets(detail)}") from error
+        except urllib.error.URLError as error:
+            raise LLMError(f"LLM request failed: {redact_secrets(str(error.reason))}") from error
+    raise LLMError("LLM request failed: exhausted retries")  # pragma: no cover
+
+
+def _retry_after(error: urllib.error.HTTPError, detail: str, attempt: int) -> float:
+    """Seconds to wait before retrying: honor Retry-After header or the API's
+    'try again in Xs' hint, else exponential backoff. Capped to avoid stalls."""
+    header = error.headers.get("Retry-After") if error.headers else None
+    if header:
+        try:
+            return min(float(header), 30.0)
+        except ValueError:
+            pass
+    match = _RETRY_HINT.search(detail)
+    if match:
+        return min(float(match.group(1)) + 0.5, 30.0)
+    return min(2.0 ** attempt, 30.0)
