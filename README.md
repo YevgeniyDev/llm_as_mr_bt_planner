@@ -10,7 +10,8 @@ feed structured errors back to the LLM for self-correction.
 **Research stance: the LLM is the planner.** There is no deterministic BT-synthesis or back-chaining
 algorithm (unlike MRBTP-style symbolic planners). The only role of the deterministic code is to *verify and
 simulate* the LLM's output — never to author or repair plan structure. By default the program runs in **pure
-mode**: the LLM receives only the prompt + initial state + the output schema, and the validator reports *what*
+mode**: the LLM receives the instruction, explicit declarative scenario and capability model, schema, and
+task-agnostic method, while the validator reports *what*
 is wrong without suggesting task-specific fixes. Optional **assisted mode** (dependency hints / producer
 suggestions) exists solely as an ablation baseline — see [Research design](#research-design-pure-vs-assisted).
 
@@ -33,7 +34,7 @@ tick-based simulation, and the static validator) is in [`docs/algorithms.md`](do
 - **Real Behavior Trees** — `Sequence`, `Fallback`, and `Parallel` composites with `Action`/`Condition`
   leaves, executed by a tick-based engine with `SUCCESS`/`FAILURE`/`RUNNING` status and reactive memory.
   Inter-robot waits are modelled as blocking guards; one action per robot per tick gives a readable timeline.
-- **LLM is the planner** — pure mode by default (prompt + initial state only); the deterministic code only
+- **LLM is the planner** — pure mode by default (no producer-specific hints); the deterministic code only
   validates and simulates. Three task-agnostic reliability levers — a general back-chaining *method* in the
   prompt, best-of-N sampling, and **two-stage generation** (action plan → behavior trees) — raise success
   without reintroducing task-specific hints.
@@ -138,6 +139,18 @@ python -m llm_mr_bt_planner experiment --scenario data/scenario.json --scenario 
     --trials 5 --csv outputs/results.csv --markdown outputs/results.md
 ```
 
+For paper results, use the fixed protocol instead of ad-hoc commands:
+
+```powershell
+python scripts/run_experiment_matrix.py --matrix experiments/protocol_v1.json
+```
+
+It runs 30 seeded trials for every LLM condition on both scenarios, runs the
+native MRBTP condition once per scenario, and creates a non-overwriting snapshot
+under `results/snapshots/`. The snapshot contains raw outputs, aggregates, the
+matrix, commit SHA, environment metadata, checksums, and the LaTeX tables consumed
+by `main.tex`.
+
 Run the engine tests (deterministic, no API key, no LLM):
 
 ```powershell
@@ -167,6 +180,13 @@ The result JSON gains a `recovery` block (per-event `log`, `episodes`, whether t
 recovery). `--fail-prob P --fail-seed S` is a stochastic alternative for robustness experiments. A MuJoCo
 physics oracle (fail when an action's target predicate does not hold in the scene) is the next rung — see
 [`docs/roadmap.md`](docs/roadmap.md).
+
+Physical object incidents need a stricter path than retrying an action. The
+contracts in `execution/anomalies.py` pause the team, invalidate stale holding
+facts, and select reacquisition, quarantine-and-replacement, reassignment, or safe
+abort/operator escalation for dropped, missing, or damaged items. See
+[`docs/failure_mitigation.md`](docs/failure_mitigation.md). Perception and motion
+recovery are explicitly future backend integrations.
 
 ## Markdown skills (prompt engineering)
 
@@ -216,8 +236,9 @@ python -m llm_mr_bt_planner run --scenario data/scenario.json --backend mujoco -
 
 ## Baselines
 
-The same `experiment` command evaluates competing methods via `--method`, all scored by the **same**
-validator + simulator on the same scenarios so the comparison is apples-to-apples:
+The same `experiment` command evaluates competing methods via `--method`. The
+proposed, flat, and hierarchical LLM methods use the same validator and simulator.
+MRBTP is explicitly labelled `native_mrbtp` because its Condition semantics differ:
 
 ```powershell
 python -m llm_mr_bt_planner experiment --method proposed --scenario data/scenario.json --scenario data/scenario2.json --trials 5 --markdown outputs/cmp_proposed.md
@@ -248,7 +269,7 @@ conda run -n mrbtp pip install -e third_party/MRBTP
 conda run -n mrbtp pip install "antlr4-python3-runtime==4.13.1"
 # Port our scenarios -> run MRBTP -> write outputs/mrbtp_results.json (--time-limit secs/scenario):
 conda run -n mrbtp python scripts/run_mrbtp.py --scenario data/scenario.json --scenario data/scenario2.json --time-limit 300
-# Ingest + re-score under our validator/simulator, into the comparison table:
+# Ingest the labelled native outcome into the comparison table:
 python -m llm_mr_bt_planner experiment --method mrbtp --scenario data/scenario.json --scenario data/scenario2.json
 ```
 
@@ -256,10 +277,11 @@ python -m llm_mr_bt_planner experiment --method mrbtp --scenario data/scenario.j
 (`baselines/mrbtp_port.py`, with delete-relaxation reachability pruning), runs `MAOBTP`, and reports
 MRBTP's **native** metrics. MRBTP uses standard reactive BT semantics (a Condition returns
 SUCCESS/FAILURE), which is incompatible with our blocking-guard simulator (Condition returns RUNNING for
-synchronization), so its trees are **not** re-scored by our simulator; instead, since MRBTP is sound and
-complete, goal-success is taken from whether it found a plan within the time budget (it sets a timeout
-marker otherwise). `mrbtp_bt_to_plan` (`baselines/mrbtp_adapter.py`) converts its `AnyTreeNode` trees to
-our Plan JSON for inspection/visualization.
+synchronization), so its trees are **not** re-scored by our simulator. Native success
+requires three observable conditions: no timeout, a back-chained condition grounded
+in the initial state, and extractable trees for all robots. Frontier exhaustion is a
+failure; the old `success = not timed_out` shortcut has been removed.
+`mrbtp_bt_to_plan` converts `AnyTreeNode` trees only for inspection/visualization.
 
 ## Research design: pure vs assisted
 

@@ -2,6 +2,33 @@
 
 ## Unreleased
 
+### Added — fixed evaluation protocol and auditable paper tables
+- Added `experiments/protocol_v1.json`: two scenarios, seven LLM conditions with
+  30 best-effort seeded trials each, plus one native MRBTP run per scenario.
+- Added immutable result snapshots containing raw outputs, aggregates, model and
+  sampling configuration, commit SHA, environment metadata, LaTeX tables, and
+  SHA-256 checksums. `main.tex` consumes the generated tables directly.
+- Expanded reporting with Wilson intervals, synchronization/capability/causal/
+  structural error rates, deadlock/timeout rates, BT complexity, synchronization
+  edges, executed actions, symbolic makespan, correction rounds, and wall time.
+
+### Fixed — MRBTP native success semantics
+- Replaced `success = not timed_out` with the auditable `mrbtp_native_v1`
+  criterion: no timeout, an expanded condition grounded in the initial state, and
+  extractable per-robot trees. Frontier exhaustion is now a failure.
+- Labelled MRBTP as a native metric instead of claiming it is re-simulated under
+  incompatible blocking-guard Condition semantics.
+
+### Added — physical object-incident mitigation contracts
+- Added conservative decisions for dropped, missing, damaged, and tool-failure
+  incidents: safe stop, perception refresh, reacquisition, quarantine/replacement,
+  reassignment, or operator escalation. Physical perception and recovery remain
+  backend integration work.
+
+### Added — continuous integration
+- Added Python 3.10/3.12 symbolic test, Ruff, and mypy checks, plus a separate
+  manually triggered MuJoCo workflow.
+
 ### Added — execution-time recovery ladder (failure detection → retry → reassign)
 - New `recovery.py`: a `RecoveryController` that reacts to *runtime* action failures, distinct from the
   existing planning-time LLM self-correction. **Tier 1** retries a failed action on the same robot

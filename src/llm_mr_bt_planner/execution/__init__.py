@@ -10,6 +10,14 @@
 
 from __future__ import annotations
 
+from .anomalies import (
+    ExecutionIncident,
+    IncidentMitigationPolicy,
+    IncidentType,
+    MitigationAction,
+    MitigationDecision,
+    apply_incident_to_state,
+)
 from .base import ExecutionBackend, ExecutionResult
 from .ros import RosExecutionBackend, export_behaviortree_cpp_xml
 from .symbolic import SymbolicExecutionBackend
@@ -17,6 +25,12 @@ from .symbolic import SymbolicExecutionBackend
 __all__ = [
     "ExecutionBackend",
     "ExecutionResult",
+    "ExecutionIncident",
+    "IncidentMitigationPolicy",
+    "IncidentType",
+    "MitigationAction",
+    "MitigationDecision",
+    "apply_incident_to_state",
     "SymbolicExecutionBackend",
     "RosExecutionBackend",
     "export_behaviortree_cpp_xml",

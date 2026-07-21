@@ -36,6 +36,8 @@ class PlannerResult:
     validation_errors: list[dict[str, str]]
     simulation: dict[str, Any]
     wall_seconds: float = 0.0
+    metric_scope: str = "shared_validator_simulator"
+    native_metrics: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -50,6 +52,8 @@ class PlannerResult:
             "plan": self.plan,
             "validation_errors": self.validation_errors,
             "simulation": self.simulation,
+            "metric_scope": self.metric_scope,
+            "native_metrics": self.native_metrics or {},
         }
 
 
@@ -66,8 +70,8 @@ def run_planner(
 ) -> PlannerResult:
     """Run Algorithm 1.
 
-    Default mode is *pure*: the LLM gets only the prompt + initial state +
-    output schema (plus a general, task-agnostic planning method), and the
+    Default mode is *pure*: the LLM gets the instruction, explicit scenario and
+    capability model, output schema, and a general task-agnostic method; the
     validator reports problems without naming specific producer actions.
     ``include_hints`` / ``suggest_producers`` enable the assisted (ablation)
     condition. ``samples`` > 1 enables best-of-N. ``two_stage`` decomposes

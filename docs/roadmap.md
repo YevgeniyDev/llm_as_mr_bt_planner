@@ -46,6 +46,18 @@ drop the corresponding note from `docs/architecture.md`.
   HTML visualization, optionally stitch a cumulative cross-episode trace so a run with retries/reassignments
   reads as one timeline.
 
+## Physical object incidents
+
+- Connect MuJoCo contact height/velocity and gripper observations to
+  `execution.anomalies.ExecutionIncident`.
+- Add perception-confirmed reacquisition and spare-object substitution skills.
+- Invalidate completed predicates causally dependent on a damaged item, then
+  regenerate or revalidate only the remaining plan suffix.
+- Add robustness metrics: incident recovery, replacement, safe-abort,
+  human-escalation, and recovery-latency rates.
+- Preserve the safety rule that no plan resumes until refreshed predicates pass
+  validation. See `docs/failure_mitigation.md`.
+
 ## Real-robot execution (ROS)
 
 `RosExecutionBackend.execute` still raises with wiring guidance. Standing it up needs: an action/skill

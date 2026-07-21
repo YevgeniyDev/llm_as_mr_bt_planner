@@ -38,6 +38,12 @@ class AnthropicClient:
         self._base_url = (base_url or os.environ.get("ANTHROPIC_BASE_URL", "https://api.anthropic.com")).rstrip("/")
         self._timeout = timeout if timeout is not None else float(os.environ.get("ANTHROPIC_TIMEOUT_SECONDS", "120"))
         self._max_tokens = max_tokens or int(os.environ.get("ANTHROPIC_MAX_TOKENS", "16000"))
+        self.temperature = None
+        self.seed = None
+
+    def set_seed(self, seed: int | None) -> None:  # noqa: ARG002
+        """Anthropic does not currently expose a reproducible sampling seed."""
+        self.seed = None
 
     def complete(self, system: str, user: str) -> str:
         if not self._api_key:

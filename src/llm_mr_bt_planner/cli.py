@@ -100,7 +100,7 @@ def _build_parser() -> argparse.ArgumentParser:
     exp.add_argument("--method", choices=["proposed", "flat", "hier", "mrbtp"], default="proposed",
                      help="Which method to evaluate: 'proposed' (this work) or a baseline "
                           "(flat=LLM-MARS-style, hier=LLM-as-BT-Planner-style, mrbtp=authors' code). "
-                          "All methods are scored by the same validator+simulator.")
+                          "LLM methods use the shared validator/simulator; MRBTP uses labelled native metrics.")
     exp.add_argument("--provider", default="openai", choices=["openai", "anthropic"],
                      help="LLM provider (default openai; falls back to anthropic if OPENAI_API_KEY is unset).")
     exp.add_argument("--model", default=None)
@@ -112,6 +112,8 @@ def _build_parser() -> argparse.ArgumentParser:
     exp.add_argument("--feedback", choices=["minimal", "rich"], default="minimal")
     exp.add_argument("--samples", type=int, default=1, help="Best-of-N plans per generation.")
     exp.add_argument("--temperature", type=float, default=None, help="OpenAI sampling temperature.")
+    exp.add_argument("--seed", type=int, default=2026001,
+                     help="First best-effort provider seed; trial i uses seed+i-1.")
     exp.add_argument("--two-stage", action="store_true", help="Two-stage generation (action plan -> BTs).")
     exp.add_argument("--skills", choices=["off", "on"], default="off",
                      help="Inject Markdown planning skills (skills/*.md) into the proposed method's prompts "
@@ -316,7 +318,8 @@ def _cmd_experiment(args: argparse.Namespace) -> int:
         trials=args.trials, max_corrections=args.max_corrections, max_ticks=args.max_ticks,
         include_hints=(args.hints == "full"), suggest_producers=(args.feedback == "rich"),
         samples=args.samples, two_stage=args.two_stage, skills_dir=_skills_dir(args), on_trial=progress,
-        runner=runner, method=args.method,
+        runner=runner, method=args.method, condition=args.method,
+        seeds=[args.seed + index for index in range(args.trials)],
     )
 
     save_json(resolve_project_path(args.json_path), report.to_dict())

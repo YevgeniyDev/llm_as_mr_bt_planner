@@ -1,0 +1,88 @@
+{
+  "protocol_version": "llm-mr-bt-eval-v1",
+  "provider": "openai",
+  "model": "gpt-4o-2024-08-06",
+  "temperature": 0.7,
+  "trials": 30,
+  "seed_start": 2026001,
+  "max_ticks": 80,
+  "scenarios": [
+    "data/scenario.json",
+    "data/scenario2.json"
+  ],
+  "conditions": [
+    {
+      "id": "pure_single_shot",
+      "method": "proposed",
+      "max_corrections": 0,
+      "samples": 1,
+      "two_stage": false,
+      "hints": "none",
+      "feedback": "minimal"
+    },
+    {
+      "id": "pure_self_correction",
+      "method": "proposed",
+      "max_corrections": 4,
+      "samples": 1,
+      "two_stage": false,
+      "hints": "none",
+      "feedback": "minimal"
+    },
+    {
+      "id": "pure_best_of_4",
+      "method": "proposed",
+      "max_corrections": 4,
+      "samples": 4,
+      "two_stage": false,
+      "hints": "none",
+      "feedback": "minimal"
+    },
+    {
+      "id": "pure_two_stage",
+      "method": "proposed",
+      "max_corrections": 4,
+      "samples": 1,
+      "two_stage": true,
+      "hints": "none",
+      "feedback": "minimal"
+    },
+    {
+      "id": "assisted_upper_bound",
+      "method": "proposed",
+      "max_corrections": 4,
+      "samples": 1,
+      "two_stage": false,
+      "hints": "full",
+      "feedback": "rich"
+    },
+    {
+      "id": "llm_mars_flat",
+      "method": "flat",
+      "max_corrections": 0,
+      "samples": 1,
+      "two_stage": false,
+      "hints": "none",
+      "feedback": "minimal"
+    },
+    {
+      "id": "llm_bt_hierarchical",
+      "method": "hier",
+      "max_corrections": 4,
+      "samples": 1,
+      "two_stage": false,
+      "hints": "none",
+      "feedback": "minimal"
+    },
+    {
+      "id": "mrbtp_native",
+      "method": "mrbtp",
+      "trials": 1,
+      "max_corrections": 0,
+      "samples": 1,
+      "two_stage": false,
+      "hints": "none",
+      "feedback": "minimal"
+    }
+  ]
+}

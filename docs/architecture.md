@@ -123,7 +123,8 @@ and gated behind flags, to avoid confounding the "LLM alone" claim:
 - The validator can append candidate-producer suggestions to its error messages
   (`suggest_producers` → `_candidate_text` / `_same_name_text`).
 
-In **pure mode** (default) neither is active: prompt + initial state + schema in, "what is wrong" out. In
+In **pure mode** (default) neither is active: instruction + explicit scenario/capability model + schema +
+task-agnostic method in, "what is wrong" out. In
 **assisted mode** both can be enabled to measure how much the scaffolding helps. The same fixed hint/suggestion
 text would not generalize across different tasks anyway — which is exactly why it is an opt-in baseline, not the
 default path.
@@ -165,6 +166,15 @@ seam `simulate` already exposes. Termination is bounded by retries × capable-ro
 `SymbolicExecutionBackend` takes an optional `recovery=RecoveryController(...)` and folds the ladder timeline
 into `ExecutionResult.details["recovery"]`. Driving the ladder from a MuJoCo physics oracle is on the roadmap
 (the `action_oracle` seam already exists; see `docs/roadmap.md`).
+
+### Object incidents: drop, loss, and damage
+
+An action-level retry is unsafe when the world has changed. The contracts in
+`execution.anomalies` pause the team, invalidate stale holding predicates, classify
+the incident, and choose between reacquisition, quarantine-and-replacement,
+capability reassignment, or safe abort/human escalation. See
+`docs/failure_mitigation.md`. Physical perception and motion recovery remain backend
+integration work; the deterministic policy and testable state transition are in place.
 
 ## Markdown-authored skills
 
