@@ -5,11 +5,10 @@ scenarios are MAGrid environment subclasses, not external JSON. So it is run *ou
 this package (see ``scripts/run_mrbtp.py``), and this module ingests the results it
 produced into the same :class:`PlannerResult`/metrics shape as every other method.
 
-Two ingest modes per scenario record in the results file:
-  * ``plan`` present  -> the MRBTP per-robot trees, converted to our Plan JSON, are
-    re-scored by *our* validator+simulator on *our* scenario (fully comparable).
-  * ``plan`` absent   -> use the recorded native metrics directly (mapped to our
-    columns), for when re-scoring is impractical.
+MRBTP is reported under a transparent native protocol because its standard
+Condition nodes return FAILURE while this project's synchronization guards return
+RUNNING. Native results therefore share table columns but are explicitly labelled
+``metric_scope=native_mrbtp`` and are never presented as same-simulator evidence.
 """
 
 from __future__ import annotations
@@ -40,7 +39,7 @@ def run_mrbtp(
     record = _load_record(results_path, scenario.task_id)
     provider, model = "mrbtp", record.get("variant", "MRBTP")
 
-    if record.get("plan") is not None:
+    if record.get("plan") is not None and record.get("comparison_protocol") == "shared_adapter_v1":
         plan = parse_plan({**record["plan"], "task_id": scenario.task_id})
         validation, simulation = score_plan(plan, scenario, max_ticks=max_ticks)
         return PlannerResult(
@@ -61,21 +60,34 @@ def run_mrbtp(
             wall_seconds=float(record.get("planning_time", 0.0)),
         )
 
-    # Native-metric fallback: trust MRBTP's reported numbers (soundness => valid, no
-    # sync errors by construction), with no re-simulation trace.
-    success = bool(record.get("success", False))
+    protocol = record.get("comparison_protocol", "legacy_unverified")
+    success = bool(record.get("native_success", record.get("success", False)))
+    native_valid = bool(record.get("valid", False)) and protocol == "mrbtp_native_v1"
+    errors = []
+    if not success:
+        errors.append({"type": f"mrbtp_{record.get('outcome', 'unverified')}",
+                       "message": record.get("error") or "MRBTP did not return a grounded native plan."})
     return PlannerResult(
         task_id=scenario.task_id,
         provider=provider,
         model=model,
-        valid=bool(record.get("valid", True)),
+        valid=native_valid,
         success=success,
         goal_success=bool(record.get("goal_success", success)),
         correction_rounds=int(record.get("feedback_rounds", 0)),
         plan=record.get("plan_summary", {}),
-        validation_errors=[],
-        simulation={"final_state": [], "trace": [], "errors": []},
+        validation_errors=errors,
+        simulation={"final_state": [], "trace": [], "errors": errors},
         wall_seconds=float(record.get("planning_time", 0.0)),
+        metric_scope="native_mrbtp",
+        native_metrics={
+            "comparison_protocol": protocol,
+            "outcome": record.get("outcome"),
+            "timed_out": bool(record.get("timed_out", False)),
+            "grounded_condition_found": bool(record.get("grounded_condition_found", False)),
+            "tree_count": int(record.get("tree_count", 0)),
+            "expanded_count": record.get("expanded_count"),
+        },
     )
 
 
@@ -127,7 +139,7 @@ def mrbtp_bt_to_plan(mrbtp_trees: dict[str, Any], scenario: Scenario) -> dict[st
 
     ``mrbtp_trees`` maps ``robot_id -> serialized AnyTreeNode root``. We rebuild the
     per-robot behavior trees, then derive ``task_graph`` and ``assignments`` from the
-    Action leaves so the result re-scores under our validator+simulator. MRBTP shares
+    Action leaves for inspection or an explicitly labelled adapter study. MRBTP shares
     conditions across trees for coordination rather than declaring explicit edges, so
     ``synchronization`` is left empty (our V2 checks global producer existence, which
     a sound MRBTP plan satisfies).

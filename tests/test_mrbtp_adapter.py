@@ -1,9 +1,8 @@
 """MRBTP adapter: tree conversion, scenario porting, and results ingest.
 
 LLM-free and MRBTP-free: the MRBTP package is not imported here. We pin the
-AnyTreeNode -> Plan converter on a fixture, check the scenario porting grounds
-capabilities and expands delete patterns correctly, and verify the ingest path
-re-scores a recorded plan with our own validator+simulator.
+AnyTreeNode -> Plan converter on a fixture, check scenario porting, and verify
+that shared-adapter and native-protocol records remain explicitly distinct.
 """
 
 from __future__ import annotations
@@ -85,6 +84,7 @@ def test_port_expands_delete_patterns(gear_scenario):
 def test_run_mrbtp_ingests_recorded_plan(toy_scenario, tmp_path):
     results = {"scenarios": {"toy": {
         "variant": "MAOBTP",
+        "comparison_protocol": "shared_adapter_v1",
         "planning_time": 0.5,
         "feedback_rounds": 0,
         "plan": mrbtp_bt_to_plan(_TOY_TREES, toy_scenario),
@@ -102,8 +102,11 @@ def test_run_mrbtp_native_metrics_path(toy_scenario, tmp_path):
     """When no plan is recorded (the scripts/run_mrbtp.py default), the adapter uses
     MRBTP's native found/time metrics directly."""
     results = {"scenarios": {"toy": {
-        "variant": "MAOBTP", "valid": True, "success": True, "goal_success": True,
-        "timed_out": False, "planning_time": 0.71, "expanded_count": 987, "feedback_rounds": 0,
+        "variant": "MAOBTP", "comparison_protocol": "mrbtp_native_v1",
+        "metric_scope": "native_mrbtp", "outcome": "grounded_plan",
+        "valid": True, "success": True, "goal_success": True, "native_success": True,
+        "grounded_condition_found": True, "tree_count": 2,
+        "timed_out": False, "planning_time": 0.71, "expanded_count": 987,
     }}}
     path = tmp_path / "mrbtp_results.json"
     path.write_text(json.dumps(results), encoding="utf-8")
@@ -111,17 +114,31 @@ def test_run_mrbtp_native_metrics_path(toy_scenario, tmp_path):
     assert result.valid and result.success and result.goal_success
     assert result.wall_seconds == 0.71
     assert result.validation_errors == []
+    assert result.metric_scope == "native_mrbtp"
 
 
 def test_run_mrbtp_native_timeout_is_failure(toy_scenario, tmp_path):
     results = {"scenarios": {"toy": {
-        "variant": "MAOBTP", "valid": False, "success": False, "goal_success": False,
-        "timed_out": True, "planning_time": 300.0, "feedback_rounds": 0,
+        "variant": "MAOBTP", "comparison_protocol": "mrbtp_native_v1",
+        "outcome": "timeout", "valid": False, "native_success": False,
+        "timed_out": True, "planning_time": 300.0,
     }}}
     path = tmp_path / "mrbtp_results.json"
     path.write_text(json.dumps(results), encoding="utf-8")
     result = run_mrbtp(toy_scenario, None, results_path=str(path))
     assert not result.valid and not result.success
+
+
+def test_legacy_not_timed_out_record_is_not_treated_as_valid(toy_scenario, tmp_path):
+    results = {"scenarios": {"toy": {
+        "variant": "MAOBTP", "valid": True, "success": True,
+        "timed_out": False, "planning_time": 0.1,
+    }}}
+    path = tmp_path / "mrbtp_results.json"
+    path.write_text(json.dumps(results), encoding="utf-8")
+    result = run_mrbtp(toy_scenario, None, results_path=str(path))
+    assert not result.valid
+    assert result.metric_scope == "native_mrbtp"
 
 
 def test_run_mrbtp_missing_file_raises(toy_scenario, tmp_path):

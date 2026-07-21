@@ -1,7 +1,8 @@
 """Baseline plan generators for comparison against the proposed method.
 
-Each baseline produces a plan that is scored by the *same* validator + simulator as the
-proposed method, so all methods populate identical metric columns on the same scenarios.
+The LLM baselines use the shared validator and simulator. MRBTP uses an explicitly
+labelled native protocol because its Condition semantics are incompatible with
+blocking synchronization guards.
 Select one via the ``BASELINES`` registry (exposed as ``--method`` on the CLI).
 """
 

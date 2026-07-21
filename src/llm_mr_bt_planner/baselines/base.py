@@ -1,11 +1,9 @@
 """Shared scaffolding for baseline plan generators.
 
-Every baseline produces a :class:`~llm_mr_bt_planner.plan.Plan` and is scored by the
-*same* task-agnostic validator and tick simulator as the proposed method, so all
-methods yield identical metric columns (validity, goal success, sync error,
-correction rounds, time). A baseline differs only in *how* it produces the plan -
-which prompt, which assists, whether it has a self-correction loop. This module
-holds the pieces common to all of them so each baseline file stays small.
+The LLM baselines produce a :class:`~llm_mr_bt_planner.plan.Plan` and are scored by
+the same task-agnostic validator and tick simulator as the proposed method. MRBTP
+uses a separately labelled native protocol because its FAILURE-returning Condition
+semantics are not equivalent to this framework's blocking synchronization guards.
 """
 
 from __future__ import annotations

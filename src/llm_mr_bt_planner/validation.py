@@ -144,6 +144,9 @@ def _validate_assignments(
             continue
         task_id = assignment.get("task_id")
         robot_id = assignment.get("robot")
+        if not isinstance(task_id, str) or not isinstance(robot_id, str):
+            report.add("invalid_assignment", "Assignment task_id and robot must be strings.")
+            continue
         if task_id not in tasks:
             report.add("unknown_task", f"Assignment references unknown task '{task_id}'.")
             continue

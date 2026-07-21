@@ -31,6 +31,7 @@ class OpenAIClient:
         base_url: str | None = None,
         timeout: float | None = None,
         temperature: float | None = None,
+        seed: int | None = None,
     ) -> None:
         self.name = "openai"
         self.model = model or os.environ.get("OPENAI_MODEL", DEFAULT_MODEL)
@@ -38,6 +39,12 @@ class OpenAIClient:
         self._base_url = (base_url or os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1")).rstrip("/")
         self._timeout = timeout if timeout is not None else float(os.environ.get("OPENAI_TIMEOUT_SECONDS", "60"))
         self._temperature = temperature if temperature is not None else float(os.environ.get("OPENAI_TEMPERATURE", "0"))
+        self.temperature = self._temperature
+        self.seed = seed
+
+    def set_seed(self, seed: int | None) -> None:
+        """Set the best-effort provider seed used by the next request."""
+        self.seed = seed
 
     def complete(self, system: str, user: str) -> str:
         if not self._api_key:
@@ -52,6 +59,8 @@ class OpenAIClient:
             "temperature": self._temperature,
             "response_format": {"type": "json_object"},
         }
+        if self.seed is not None:
+            payload["seed"] = self.seed
         request = urllib.request.Request(
             self._completions_url(),
             data=json.dumps(payload).encode("utf-8"),

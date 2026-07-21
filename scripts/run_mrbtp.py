@@ -3,10 +3,11 @@
 This drives the authors' released code in ``third_party/MRBTP`` (clone it there and
 ``pip install -e`` it in a Python 3.10 env with its requirements). It ports each of our
 scenarios into MRBTP's symbolic input (ground ``PlanningAction``s), runs the planner,
-converts the per-robot trees back into our Plan JSON, and writes
-``outputs/mrbtp_results.json`` keyed by ``task_id``. The main package's
-``--method mrbtp`` then ingests that file and re-scores each plan with our
-validator+simulator, so MRBTP lands in the same comparison table as every other method.
+writes MRBTP's native outcome and serialized trees to ``outputs/mrbtp_results.json``.
+MRBTP uses FAILURE-returning conditions while this project uses blocking guards,
+so its native result is deliberately *not* passed through our simulator. The
+comparison table labels it as ``mrbtp_native_v1`` rather than implying identical
+execution semantics.
 
 Usage (from the repo root, inside the MRBTP env):
 
@@ -73,15 +74,32 @@ def _build_action_lists(ported: dict, PlanningAction):
     return robot_ids, action_lists
 
 
+def _grounded_conditions(planner, start: frozenset[str]) -> list[frozenset[str]]:
+    """Return expanded MRBTP conditions satisfied by the initial state.
+
+    ``MAOBTP.bfs_planning`` does not return a success flag. Its actual success
+    termination is ``start >= popped_condition``. The popped condition is not
+    retained, but every popped condition was first inserted in at least one
+    planning agent's ``expanded_condition_dict``. Checking those dictionaries is
+    therefore a faithful post-run reconstruction; merely observing no timeout is
+    not sufficient because the frontier may have been exhausted.
+    """
+    grounded: set[frozenset[str]] = set()
+    for agent in getattr(planner, "planned_agent_list", None) or []:
+        for condition in getattr(agent, "expanded_condition_dict", {}):
+            condition = frozenset(condition)
+            if start >= condition:
+                grounded.add(condition)
+    return sorted(grounded, key=lambda item: (len(item), sorted(item)))
+
+
 def run_one(scenario, MAOBTP, PlanningAction, dump_trees: bool, time_limit: float) -> dict:
     """Run MRBTP and report native metrics.
 
-    Success is taken from the planner's own outcome, not from our blocking-guard
-    simulator (which uses incompatible Condition semantics). MRBTP is sound and
-    complete: it sets ``expanded_time`` only when it *times out*, so finishing within
-    the budget on a solvable scenario means it found a goal-reaching plan, which is
-    correct by construction. We therefore report ``valid``/``goal_success`` = "found",
-    with planning time and expanded-condition count as MRBTP's native cost metrics.
+    Native success requires all of: no timeout, an expanded condition grounded in
+    the initial state, and extractable per-robot trees. This avoids the old and
+    incorrect ``found = not timed_out`` shortcut. The result remains a native MRBTP
+    metric because Condition semantics are incompatible with our blocking simulator.
     """
     ported = port_scenario(scenario)
     robot_ids, action_lists = _build_action_lists(ported, PlanningAction)
@@ -89,23 +107,60 @@ def run_one(scenario, MAOBTP, PlanningAction, dump_trees: bool, time_limit: floa
     planner = MAOBTP(verbose=False, start=frozenset(ported["start"]), env=None,
                      max_time_limit=time_limit)
     t0 = time.time()
-    planner.bfs_planning(frozenset(ported["goal"]), action_lists=action_lists)
+    error = None
+    try:
+        planner.bfs_planning(frozenset(ported["goal"]), action_lists=action_lists)
+    except Exception as exc:  # external baseline must produce an auditable record
+        error = f"{type(exc).__name__}: {exc}"
     planning_time = time.time() - t0
 
-    timed_out = getattr(planner, "expanded_time", 0.0) > 0.0  # set only on timeout
-    found = not timed_out
+    timed_out = getattr(planner, "expanded_time", 0.0) > 0.0
+    grounded = [] if error else _grounded_conditions(planner, frozenset(ported["start"]))
+    trees: dict[str, dict] = {}
+    tree_error = None
+    if grounded and not timed_out:
+        try:
+            btml_list = planner.get_btml_list()
+            if len(btml_list) != len(robot_ids):
+                raise RuntimeError(f"expected {len(robot_ids)} trees, got {len(btml_list)}")
+            trees = {
+                robot_ids[i]: _serialize_anytree(btml_list[i].anytree_root)
+                for i in range(len(robot_ids))
+            }
+        except Exception as exc:
+            tree_error = f"{type(exc).__name__}: {exc}"
 
-    if dump_trees:
-        trees = {robot_ids[i]: _serialize_anytree(planner.get_btml_list()[i].anytree_root)
-                 for i in range(len(robot_ids))}
+    native_success = bool(grounded and trees and not timed_out and error is None and tree_error is None)
+    if error:
+        outcome = "error"
+    elif timed_out:
+        outcome = "timeout"
+    elif not grounded:
+        outcome = "frontier_exhausted"
+    elif tree_error:
+        outcome = "tree_extraction_error"
+    else:
+        outcome = "grounded_plan"
+
+    if dump_trees and trees:
         print(json.dumps(trees, indent=2))
 
     return {
         "variant": "MAOBTP",
-        "valid": found,
-        "success": found,
-        "goal_success": found,
+        "comparison_protocol": "mrbtp_native_v1",
+        "metric_scope": "native_mrbtp",
+        "outcome": outcome,
+        "valid": native_success,
+        "success": native_success,
+        "goal_success": native_success,
+        "native_success": native_success,
+        "grounded_condition_found": bool(grounded),
+        "grounded_conditions": [sorted(condition) for condition in grounded[:10]],
+        "tree_count": len(trees),
+        "expected_tree_count": len(robot_ids),
+        "native_trees": trees,
         "timed_out": timed_out,
+        "error": error or tree_error,
         "planning_time": planning_time,
         "expanded_count": getattr(planner, "record_expanded_num", None),
         "feedback_rounds": 0,
@@ -133,7 +188,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         r = results[scenario.task_id]
         print(f"  done in {r['planning_time']:.3f}s, expanded={r['expanded_count']}, "
-              f"found={r['goal_success']} (timed_out={r['timed_out']})")
+              f"outcome={r['outcome']} success={r['goal_success']}")
 
     out = resolve_project_path(args.output)
     Path(out).parent.mkdir(parents=True, exist_ok=True)

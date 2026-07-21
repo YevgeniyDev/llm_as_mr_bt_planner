@@ -5,7 +5,7 @@
 %%    + per-robot BTs) in one JSON object, or via two-stage generation;
 %%  - verification is a static validator + a tick-based symbolic simulator with
 %%    deadlock detection; there is NO deterministic plan synthesis or repair;
-%%  - default "pure" mode gives the model only prompt + initial state + schema;
+%%  - default "pure" mode gives the model the declarative scenario, schema, and task-agnostic method;
 %%    "assisted" mode (hints / producer suggestions) is an ablation baseline.
 
 \documentclass[journal]{IEEEtran}
@@ -65,7 +65,7 @@ and~Abdalla~Swikir\textsuperscript{2,*}%
 \begin{minipage}[t]{0.43\textwidth}
 \footnotesize
 \textbf{\textit{Abstract}---}
-This paper studies whether a large language model (LLM) can act as the \emph{planner} for a heterogeneous multi-robot team, generating synchronized, executable Behavior Trees (BTs) directly from a natural-language instruction and a declarative scene. Unlike single-robot BT generation, multi-robot execution additionally requires reasoning about which robot can perform each action, the causal chain of preconditions and effects, inter-robot handoffs, and explicit synchronization. We propose \emph{LLM-as-Multi-Robot-BT-Planner}, in which the LLM infers the \emph{entire} plan - task graph, capability-aware assignment, synchronization constraints, and one BT per robot - as a single structured output, with no deterministic back-chaining or plan repair. A task-agnostic static validator and a tick-based symbolic simulator with deadlock detection verify the plan and return typed, structured feedback. Invalid or deadlocked plans are corrected by the LLM itself in a closed loop. To raise reliability without reintroducing task-specific scaffolding, we use three levers - a general back-chaining \emph{method} in the prompt, best-of-$N$ sampling, and two-stage generation (action plan, then BT encoding). We separate this \emph{pure} setting (prompt + initial state + schema only) from an \emph{assisted} ablation that injects precomputed producer hints, so the ``LLM-alone'' claim can be measured. Generated trees are exported to BehaviorTree.CPP XML for downstream execution.
+This paper studies whether a large language model (LLM) can act as the \emph{planner} for a heterogeneous multi-robot team, generating synchronized, executable Behavior Trees (BTs) from a natural-language instruction and a declarative scene. The LLM infers the task graph, capability-aware assignment, synchronization constraints, and one BT per robot, while deterministic code only validates and simulates. Invalid or deadlocked plans are corrected by the LLM itself. Three task-agnostic reliability levers are evaluated: a general back-chaining method in the prompt, best-of-$N$ sampling, and two-stage generation. The \emph{pure} setting supplies the instruction, explicit symbolic scenario and capability model, output schema, and general method; an \emph{assisted} ablation additionally injects producer hints. Generated trees are exported to BehaviorTree.CPP XML and can be replayed in MuJoCo, while goal success remains symbolically evaluated.
 
 \vspace{0.6em}
 \textbf{\textit{Index Terms}---}
@@ -263,7 +263,7 @@ By \eqref{eq:transition}, only an executed action mutates $w$, and each robot ac
 The simulator therefore reports such a state as a deadlock (e.g., two robots each waiting on the other), distinct from a transient wait; exhausting the tick bound $K$ is reported separately as a timeout. Both are returned as structured feedback to the LLM.
 
 \subsection{Pure vs.\ Assisted (Ablation Control)}
-Two deterministic computations perform planning-style causal reasoning and are therefore \emph{off by default}, gated behind flags so they do not confound the ``LLM-alone'' claim: (i) precomputed dependency hints that, for each unmet precondition, list candidate producer capabilities in the prompt; and (ii) validator messages that append candidate-producer names. In \emph{pure} mode, neither is active: prompt $+$ initial state $+$ schema in, ``what is wrong'' out. In \emph{assisted} mode, both can be enabled to quantify how much such scaffolding helps - an upper-bound baseline, not the default path.
+Two deterministic computations perform planning-style causal reasoning and are therefore \emph{off by default}: (i) precomputed dependency hints and (ii) candidate-producer names in validator feedback. Pure mode still receives the natural-language instruction, explicit initial and goal states, objects, locations, robot capability libraries with preconditions and effects, the output schema, and a task-agnostic planning method. Assisted mode adds producer-specific scaffolding as an upper-bound ablation.
 
 %  -  -  - - VI. Worked Example  -  -  - -
 \section{Worked Example: Gear Assembly}
@@ -283,7 +283,7 @@ A correct plan must infer several cross-robot causal chains that are \emph{not} 
 \section{Experiments and Evaluation Protocol}
 
 \subsection{Experimental Setup}
-We evaluate whether the framework generates valid, synchronized, goal-reaching BTs for heterogeneous teams. Evaluation is in symbolic simulation, where actions update world-state predicates by \eqref{eq:transition}. Because LLM generation is stochastic, each condition is run for multiple independent trials, and we report rates and means with sample standard deviations. Generated trees are additionally exported to BehaviorTree.CPP XML to confirm that they map onto a standard executor schema; physical-robot execution is left to future work (Section~\ref{sec:limitations}).
+We evaluate whether the framework generates valid, synchronized, goal-reaching BTs for heterogeneous teams. The primary instrument is symbolic simulation. Each LLM condition uses a fixed model snapshot, temperature, correction budget, best-of-$N$ value, and published seed schedule over 30 trials. Generated trees are exported to BehaviorTree.CPP XML and replayed in MuJoCo; MuJoCo is embodiment evidence rather than an independent goal-success oracle.
 
 \subsection{Scenarios}
 \subsubsection{Gear Assembly}
@@ -304,57 +304,20 @@ We compare conditions that isolate each lever; all but the last keep the model i
 
 \subsection{Baselines}
 \label{sec:baselines}
-Beyond the internal ablation, we compare against three external methods. To keep the comparison controlled, every method is scored by the \emph{same} task-agnostic validator and tick simulator on the \emph{same} two scenarios, and the two LLM baselines use the \emph{same} base model as our method; a method differs only in how it produces the plan. Because public weights/portable code are unavailable, the two LLM baselines are faithful re-implementations of the published \emph{strategy}, adapted to our scenarios.
+Beyond the internal ablation, we compare against three methods. The two LLM baselines use the same model, scenarios, validator, and blocking-guard simulator as the proposed method. MRBTP is reported under a native protocol because its FAILURE-returning Condition semantics are incompatible with our RUNNING-returning synchronization guards; native rows are explicitly labelled rather than described as same-simulator measurements.
 \begin{itemize}
     \item \textbf{LLM-MARS-style (flat)} \cite{lykov2023llmmars}: a single generic LLM call emits one BT per robot, with no back-chaining method, no synchronization machinery, and no self-correction. It isolates how far naive multi-robot BT generation gets.
     \item \textbf{LLM-as-BT-Planner-style (hierarchical)} \cite{ao2025llmasbtplanner}: hierarchical decomposition into per-robot action lists, BT encoding, and a recursive self-correction loop on the verifier's feedback - but robots are planned \emph{independently}, with no inter-robot synchronization, so the loop can repair same-robot ordering while cross-robot dependencies remain unaddressable.
-    \item \textbf{MRBTP} \cite{cai2025mrbtp}: the authors' released symbolic multi-robot BT planner, run on our two scenarios ported into its environment format; its per-robot trees are converted back and re-scored by our verifier for comparability.
+    \item \textbf{MRBTP} \cite{cai2025mrbtp}: the authors' released symbolic planner, run on ported versions of our scenarios. Native success requires no timeout, an expanded condition grounded in the initial state, and extractable per-robot trees; ``not timed out'' alone is not success.
 \end{itemize}
 
 \subsection{Metrics}
-We report: \textbf{validity rate} (fraction of plans passing (V1)--(V4)); \textbf{goal-success rate} (fraction whose simulated final state satisfies $G$ with no deadlock, i.e., (V5)); \textbf{synchronization-error rate} (fraction of trials with a \texttt{missing\_sync\_*} or \texttt{condition\_before\_producer} error); \textbf{mean correction rounds} ($\pm$ std); and \textbf{generation time}. The same five metrics are reported for the baselines (Table~\ref{tab:baselines}); for the non-LLM MRBTP, correction rounds count its reflective-feedback iterations.
+We report validity and goal-success rates with Wilson 95\% intervals; synchronization-, capability-, causal-, and structural-error rates; deadlock and timeout rates; mean correction rounds and wall time; plan size; Action and Condition counts; synchronization edges; executed actions; and symbolic makespan. MRBTP has zero LLM correction rounds and uses native planning time and outcomes.
 
 \subsection{Results}
-Table~\ref{tab:results} gives the reporting format; entries are populated from repeated trials per condition and scenario. We expect single-shot pure generation to expose the producer-omission failure mode, self-correction and best-of-$N$ to recover a large fraction of it, two-stage generation to further raise goal success on the synchronization-heavy scenario, and the assisted upper bound to bound the residual gap attributable to missing scaffolding.
+Tables~\ref{tab:results} and~\ref{tab:diagnostics} are generated directly from an immutable result snapshot containing the matrix, commit SHA, raw per-trial outputs, aggregates, environment metadata, and SHA-256 checksums. This prevents manual transcription of values into the manuscript.
 
-\begin{table}[!t]
-\renewcommand{\arraystretch}{1.25}
-\caption{Evaluation Format: Validity, Goal Success, Synchronization Error, Correction Rounds, and Time (Per Scenario, Mean over Trials)}
-\label{tab:results}
-\centering
-\footnotesize
-\begin{tabular}{lccccc}
-\toprule
-Condition & Valid & Goal & Sync Err. & Rounds & Time \\
-\midrule
-Pure, single-shot      & -- & -- & -- & 0 & -- \\
-Pure, self-correction  & -- & -- & -- & -- & -- \\
-Pure, best-of-$N$      & -- & -- & -- & -- & -- \\
-Pure, two-stage        & -- & -- & -- & -- & -- \\
-Assisted (upper bound) & -- & -- & -- & -- & -- \\
-\bottomrule
-\end{tabular}
-\end{table}
-
-Table~\ref{tab:baselines} reports the external comparison (Section~\ref{sec:baselines}). We expect the flat baseline to expose the producer-omission failure mode most strongly; the hierarchical baseline to recover same-robot mistakes through its loop yet stall on cross-robot dependencies it cannot express; and our method to reach the goal on both scenarios from the instruction alone. MRBTP, although sound and complete, plans by cross-tree back-chaining whose search can fail to scale: in our runs it solves the smaller gear-assembly cell in well under a second, but does not converge on the synchronization-heavy sensor-calibration cell within a $300$\,s budget - precisely the scaling regime that motivates language-driven generation.
-
-\begin{table}[!t]
-\renewcommand{\arraystretch}{1.25}
-\caption{Baseline Comparison: Validity, Goal Success, Synchronization Error, Correction Rounds, and Time (Per Scenario, Mean over Trials)}
-\label{tab:baselines}
-\centering
-\footnotesize
-\begin{tabular}{lccccc}
-\toprule
-Method & Valid & Goal & Sync Err. & Rounds & Time \\
-\midrule
-LLM-MARS-style (flat)        & -- & -- & -- & 0  & -- \\
-LLM-as-BT-Planner-style      & -- & -- & -- & -- & -- \\
-MRBTP \cite{cai2025mrbtp}    & -- & -- & -- & -- & -- \\
-Proposed                     & -- & -- & -- & -- & -- \\
-\bottomrule
-\end{tabular}
-\end{table}
+\input{generated/experiment_tables.tex}
 
 %  -  -  - - VIII. Discussion  -  -  - -
 \section{Discussion}
@@ -363,7 +326,7 @@ The framework keeps a sharp boundary: the LLM owns all plan structure, and the d
 %  -  -  - - IX. Limitations  -  -  - -
 \section{Limitations}
 \label{sec:limitations}
-First, planning and verification are symbolic: the validator and simulator check logical executability and inter-robot timing, not low-level motion feasibility, perception uncertainty, grasp success, or continuous geometry. Second, the framework does not yet control real robots; BehaviorTree.CPP XML export and a documented ROS execution-backend scaffold are the seam to hardware, but physical dispatch, perception-backed predicates, and motion planning remain future work. Third, LLM generation is stochastic, so reliability is reported over repeated trials rather than from a single run. Finally, correctness is defined relative to the declarative model; guarantees do not transfer to execution beyond the fidelity of that model.
+First, planning success is symbolic: MuJoCo replays the same trees but does not yet feed contact, grasp, or collision outcomes back as the goal-success oracle. Second, the framework does not yet control real robots; BehaviorTree.CPP XML export and the ROS backend remain integration seams. A conservative incident policy specifies safe stop, reacquisition, quarantine-and-replacement, reassignment, and operator escalation for dropped or damaged items, but perception-backed detection and physical recovery skills remain future work. Third, LLM generation is stochastic, so reliability is reported over repeated trials. Finally, correctness is relative to the declarative model and does not transfer beyond its fidelity.
 
 %  -  -  - - X. Conclusion  -  -  - -
 \section{Conclusion}

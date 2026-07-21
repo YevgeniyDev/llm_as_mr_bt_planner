@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import copy
-
 from llm_mr_bt_planner.domain import parse_scenario
 from llm_mr_bt_planner.plan import parse_plan
 from llm_mr_bt_planner.validation import validate_plan
@@ -115,3 +113,4 @@ def test_condition_before_producer_same_robot():
         },
     }
     assert "condition_before_producer" in _types(plan)
+

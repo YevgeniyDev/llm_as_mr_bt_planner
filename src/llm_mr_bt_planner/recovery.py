@@ -93,7 +93,7 @@ class StochasticFailureOracle:
         if bucket in self._succeeded:
             return Status.SUCCESS
         self._attempts[bucket] = self._attempts.get(bucket, 0) + 1
-        draw = random.Random((self.seed, bucket, self._attempts[bucket])).random()
+        draw = random.Random(f"{self.seed}:{bucket}:{self._attempts[bucket]}").random()
         if draw < self._prob_for(bucket):
             return Status.FAILURE
         self._succeeded.add(bucket)
