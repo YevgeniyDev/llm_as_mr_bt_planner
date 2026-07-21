@@ -134,6 +134,7 @@ def _record_from_result(
     validation_types = tuple(error.get("type", "unknown") for error in result.validation_errors)
     simulation_errors = result.simulation.get("errors", [])
     simulation_types = tuple(error.get("type", "unknown") for error in simulation_errors)
+    shared_scope = result.metric_scope == "shared_validator_simulator"
     nodes = [
         node
         for tree in result.plan.get("behavior_trees", {}).values()
@@ -159,15 +160,15 @@ def _record_from_result(
         metric_scope=result.metric_scope,
         validation_error_types=validation_types,
         simulation_error_types=simulation_types,
-        synchronization_errors=sum(kind in _SYNC_ERRORS for kind in validation_types),
-        capability_errors=sum(kind in _CAPABILITY_ERRORS for kind in validation_types),
-        causal_errors=sum(kind in _CAUSAL_ERRORS for kind in validation_types),
+        synchronization_errors=sum(kind in _SYNC_ERRORS for kind in validation_types) if shared_scope else 0,
+        capability_errors=sum(kind in _CAPABILITY_ERRORS for kind in validation_types) if shared_scope else 0,
+        causal_errors=sum(kind in _CAUSAL_ERRORS for kind in validation_types) if shared_scope else 0,
         structural_errors=sum(
             kind not in (_SYNC_ERRORS | _CAPABILITY_ERRORS | _CAUSAL_ERRORS)
             for kind in validation_types
-        ),
+        ) if shared_scope else 0,
         deadlock="deadlock" in simulation_types,
-        timeout="timeout" in simulation_types,
+        timeout=("timeout" in simulation_types or bool((result.native_metrics or {}).get("timed_out"))),
         plan_nodes=len(nodes),
         action_nodes=sum(node.get("type") == "Action" for node in nodes),
         condition_nodes=sum(node.get("type") == "Condition" for node in nodes),

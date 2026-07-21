@@ -61,3 +61,17 @@ def test_aggregate_contains_rates_intervals_and_complexity():
     assert row["deadlock_rate"] == 1.0
     assert row["validity_ci95"].startswith("[")
     assert "Main comparison" in to_latex_tables([record])
+
+
+def test_native_timeout_uses_native_metrics_without_shared_error_classification():
+    result = _result()
+    result.metric_scope = "native_mrbtp"
+    result.native_metrics = {"timed_out": True}
+    result.validation_errors = [{"type": "mrbtp_timeout", "message": "timeout"}]
+    record = _record_from_result(
+        result, scenario="toy", trial=1, method="mrbtp",
+        condition="mrbtp_native", seed=None, temperature=None,
+    )
+    assert record.timeout
+    assert record.structural_errors == 0
+    assert record.synchronization_errors == 0

@@ -24,8 +24,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import subprocess
 import sys
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -72,6 +74,15 @@ def _build_action_lists(ported: dict, PlanningAction):
             for a in agent["actions"]
         ])
     return robot_ids, action_lists
+
+
+def _git_revision(path: Path) -> str:
+    try:
+        return subprocess.check_output(
+            ["git", "-C", str(path), "rev-parse", "HEAD"], text=True, stderr=subprocess.DEVNULL
+        ).strip()
+    except (OSError, subprocess.CalledProcessError):
+        return "unknown"
 
 
 def _grounded_conditions(planner, start: frozenset[str]) -> list[frozenset[str]]:
@@ -192,7 +203,15 @@ def main(argv: list[str] | None = None) -> int:
 
     out = resolve_project_path(args.output)
     Path(out).parent.mkdir(parents=True, exist_ok=True)
-    Path(out).write_text(json.dumps({"scenarios": results}, indent=2), encoding="utf-8")
+    payload = {
+        "protocol": "mrbtp_native_v1",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "mrbtp_commit": _git_revision(REPO_ROOT / "third_party" / "MRBTP"),
+        "runner_commit": _git_revision(REPO_ROOT),
+        "time_limit_seconds": args.time_limit,
+        "scenarios": results,
+    }
+    Path(out).write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
     print(f"[mrbtp] wrote {out}")
     return 0
 
