@@ -1,6 +1,6 @@
 # Multi-Robot Behavior Tree Planner
 
-This application uses OpenAI or Anthropic (Claude) to generate complete synchronized Behavior Trees for one three-robot courier mission. It validates and symbolically simulates the model's exact trees without inserting, reordering, or repairing BT nodes, then saves successful results as JSON and XML.
+This application uses OpenAI or Anthropic (Claude) to generate complete synchronized Behavior Trees for one three-robot courier mission. It then validates and symbolically simulates the model's exact trees and saves successful results as JSON and XML.
 
 The demonstration team is:
 
