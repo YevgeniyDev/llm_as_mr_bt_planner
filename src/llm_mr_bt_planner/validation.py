@@ -12,10 +12,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from .bt import BTNode, iter_leaves
-from .domain import Scenario, candidate_producers, positive_effects
+from .bt import COMPOSITES, BTNode, iter_leaves, iter_nodes
+from .domain import Scenario, apply_grounded, candidate_producers, ground_effects, positive_effects
 from .plan import Plan
-from .predicates import format_predicate, parse_predicate, substitute
+from .predicates import parse_predicate, substitute
 
 
 @dataclass
@@ -45,14 +45,14 @@ class ValidationReport:
 def validate_plan(plan: Plan, scenario: Scenario, suggest_producers: bool = False) -> ValidationReport:
     """Validate ``plan`` against ``scenario``.
 
-    The checks are task-agnostic (structure, capability match, predicate support,
-    synchronization consistency). With ``suggest_producers=False`` (the default)
-    the report says *what* is wrong but never names a specific producer action -
-    keeping the loop a general checker rather than a task-specific planner. Set
-    ``suggest_producers=True`` only for ablation/assisted-mode experiments.
+    The checks are task-agnostic: structure, capability contracts, predicate
+    support, causality, synchronization, resources, and liveness. When
+    ``suggest_producers`` is enabled, errors may include producer candidates
+    derived from declared effects so the correction loop gets actionable data.
     """
     report = ValidationReport()
 
+    _validate_raw_schema(plan, report)
     for field_name in plan.missing_fields():
         report.add("missing_field", f"Plan is missing '{field_name}'.")
     for robot, reason in plan.unparsable_trees.items():
@@ -60,112 +60,91 @@ def validate_plan(plan: Plan, scenario: Scenario, suggest_producers: bool = Fals
     if report.errors:
         return report
 
-    tasks = _validate_task_graph(plan, report)
-    assignments = _validate_assignments(plan, tasks, scenario, report)
     _validate_behavior_trees(plan, scenario, report)
-    _validate_assigned_actions_present(plan, tasks, assignments, report)
-    _validate_bt_actions_assigned(plan, tasks, assignments, report)
+    _validate_direct_bt_contract(plan, scenario, report)
     _validate_predicate_support(plan, scenario, report, suggest_producers)
-    _validate_synchronization(plan, scenario, report, suggest_producers)
+    _validate_explicit_waits(plan, scenario, report)
+    _validate_resources(plan, scenario, report)
     return report
 
 
 # --------------------------------------------------------------------------- #
-# Task graph
+# Exact LLM output schema
 # --------------------------------------------------------------------------- #
 
 
-def _validate_task_graph(plan: Plan, report: ValidationReport) -> dict[str, dict[str, Any]]:
-    tasks: dict[str, dict[str, Any]] = {}
-    for node in plan.task_graph:
-        if not isinstance(node, dict):
-            report.add("invalid_task_graph", "Each task graph node must be an object.")
-            continue
-        task_id = node.get("id")
-        if not task_id:
-            report.add("invalid_task_graph", "Task graph node is missing id.")
-            continue
-        if task_id in tasks:
-            report.add("duplicate_task", f"Task graph contains duplicate task id '{task_id}'.")
-            continue
-        if not node.get("action"):
-            report.add("invalid_task_graph", f"Task '{task_id}' is missing action.")
-        if not isinstance(node.get("parameters", []), list):
-            report.add("invalid_task_graph", f"Task '{task_id}' parameters must be a list.")
-        if not isinstance(node.get("depends_on", []), list):
-            report.add("invalid_task_graph", f"Task '{task_id}' depends_on must be a list.")
-        tasks[task_id] = node
-
-    for task_id, node in tasks.items():
-        for dependency in node.get("depends_on", []):
-            if dependency not in tasks:
-                report.add("unknown_dependency", f"Task '{task_id}' depends on unknown task '{dependency}'.")
-    _check_acyclic(tasks, report)
-    return tasks
+_PLAN_FIELDS = {"schema_version", "mission_id", "behavior_trees"}
+_COMMON_NODE_FIELDS = {"id", "type", "source"}
+_COMPOSITE_NODE_FIELDS = _COMMON_NODE_FIELDS | {"children"}
+_LEAF_NODE_FIELDS = _COMMON_NODE_FIELDS | {"name", "parameters"}
 
 
-def _check_acyclic(tasks: dict[str, dict[str, Any]], report: ValidationReport) -> None:
-    visiting: set[str] = set()
-    visited: set[str] = set()
+def _validate_raw_schema(plan: Plan, report: ValidationReport) -> None:
+    """Reject anything the parser would otherwise normalize or discard.
 
-    def visit(task_id: str, path: list[str]) -> None:
-        if task_id in visited:
-            return
-        if task_id in visiting:
-            cycle = path[path.index(task_id):] + [task_id]
-            report.add("cyclic_dependency", f"Task graph has dependency cycle: {' -> '.join(cycle)}.")
-            return
-        visiting.add(task_id)
-        for dependency in tasks.get(task_id, {}).get("depends_on", []):
-            if dependency in tasks:
-                visit(dependency, [*path, dependency])
-        visiting.discard(task_id)
-        visited.add(task_id)
-
-    for task_id in tasks:
-        visit(task_id, [task_id])
-
-
-# --------------------------------------------------------------------------- #
-# Assignments
-# --------------------------------------------------------------------------- #
+    A valid schema-v2 plan round-trips exactly. This makes it auditable that the
+    accepted BT is the model's tree rather than a silently rewritten derivative.
+    """
+    unknown_plan_fields = sorted(set(plan.raw) - _PLAN_FIELDS)
+    if unknown_plan_fields:
+        report.add("unknown_plan_field", f"Plan contains unsupported field(s): {', '.join(unknown_plan_fields)}.")
+    trees = plan.raw.get("behavior_trees")
+    if "behavior_trees" in plan.raw and not isinstance(trees, dict):
+        report.add("invalid_plan_type", "Plan 'behavior_trees' must be an object keyed by robot id.")
+        return
+    if isinstance(trees, dict):
+        for robot_id, node in trees.items():
+            _validate_raw_node(node, f"behavior_trees.{robot_id}", report)
+    if plan.raw and not report.errors and plan.to_dict() != plan.raw:
+        report.add(
+            "non_exact_roundtrip",
+            "The BT would require parser normalization. Every accepted field must round-trip exactly as generated.",
+        )
 
 
-def _validate_assignments(
-    plan: Plan,
-    tasks: dict[str, dict[str, Any]],
-    scenario: Scenario,
-    report: ValidationReport,
-) -> dict[str, str]:
-    assigned: dict[str, str] = {}
-    for assignment in plan.assignments:
-        if not isinstance(assignment, dict):
-            report.add("invalid_assignment", "Each assignment must be an object.")
-            continue
-        task_id = assignment.get("task_id")
-        robot_id = assignment.get("robot")
-        if not isinstance(task_id, str) or not isinstance(robot_id, str):
-            report.add("invalid_assignment", "Assignment task_id and robot must be strings.")
-            continue
-        if task_id not in tasks:
-            report.add("unknown_task", f"Assignment references unknown task '{task_id}'.")
-            continue
-        robot = scenario.robot(robot_id)
-        if robot is None:
-            report.add("unknown_robot", f"Task '{task_id}' is assigned to unknown robot '{robot_id}'.")
-            continue
-        action = tasks[task_id].get("action")
-        if action not in robot.capability_names:
-            report.add("invalid_capability", f"Robot '{robot_id}' cannot execute action '{action}'.")
-        if task_id in assigned:
-            report.add("duplicate_assignment", f"Task '{task_id}' has more than one assignment.")
-            continue  # keep the first assignment so downstream BT cross-checks stay consistent
-        assigned[task_id] = robot_id
-
-    for task_id in tasks:
-        if task_id not in assigned:
-            report.add("unassigned_task", f"Task '{task_id}' has no robot assignment.")
-    return assigned
+def _validate_raw_node(data: Any, path: str, report: ValidationReport) -> None:
+    if not isinstance(data, dict):
+        report.add("invalid_bt", f"{path} must be an object.")
+        return
+    node_type = data.get("type")
+    if node_type in COMPOSITES:
+        allowed = set(_COMPOSITE_NODE_FIELDS)
+        if node_type in {"Parallel", "ParallelAll"}:
+            allowed.add("success_threshold")
+        required = set(_COMPOSITE_NODE_FIELDS)
+    else:
+        allowed = set(_LEAF_NODE_FIELDS)
+        required = set(_LEAF_NODE_FIELDS)
+        if node_type == "Action":
+            allowed.add("task_id")
+            required.add("task_id")
+        if node_type in {"WaitFor", "AcquireResource"}:
+            allowed.add("timeout_ticks")
+            required.add("timeout_ticks")
+    unknown = sorted(set(data) - allowed)
+    if unknown:
+        report.add("unknown_node_field", f"{path} contains unsupported field(s): {', '.join(unknown)}.")
+    missing = sorted(required - set(data))
+    if missing:
+        report.add("missing_node_field", f"{path} is missing required field(s): {', '.join(missing)}.")
+    for key in ("id", "type", "source"):
+        if key in data and not isinstance(data[key], str):
+            report.add("invalid_node_field", f"{path}.{key} must be a string.")
+    if node_type in COMPOSITES:
+        children = data.get("children")
+        if isinstance(children, list):
+            for index, child in enumerate(children):
+                _validate_raw_node(child, f"{path}.children[{index}]", report)
+        return
+    if "name" in data and not isinstance(data["name"], str):
+        report.add("invalid_node_field", f"{path}.name must be a string.")
+    parameters = data.get("parameters")
+    if "parameters" in data and (
+        not isinstance(parameters, list) or any(not isinstance(item, str) for item in parameters)
+    ):
+        report.add("invalid_node_field", f"{path}.parameters must be an array of strings.")
+    if "task_id" in data and not isinstance(data["task_id"], str):
+        report.add("invalid_node_field", f"{path}.task_id must be a string.")
 
 
 # --------------------------------------------------------------------------- #
@@ -174,6 +153,8 @@ def _validate_assignments(
 
 
 def _validate_behavior_trees(plan: Plan, scenario: Scenario, report: ValidationReport) -> None:
+    for robot_id in sorted(scenario.robot_ids - set(plan.behavior_trees)):
+        report.add("missing_robot_tree", f"Plan has no behavior tree for scenario robot '{robot_id}'.")
     for robot_id, tree in plan.behavior_trees.items():
         robot = scenario.robot(robot_id)
         if robot is None:
@@ -189,7 +170,28 @@ def _validate_bt_node(
     report: ValidationReport,
     path: str,
 ) -> None:
-    if node.type in {"Sequence", "Fallback", "Parallel"}:
+    if node.type in COMPOSITES:
+        if not node.children:
+            report.add("invalid_bt", f"{path} composite '{node.type}' must have at least one child.")
+        if node.type in {"Parallel", "ParallelAll"}:
+            threshold = node.success_threshold
+            expected_all = (
+                node.type == "ParallelAll"
+                and isinstance(threshold, int)
+                and not isinstance(threshold, bool)
+                and threshold == len(node.children)
+            )
+            valid_parallel = (
+                node.type == "Parallel"
+                and isinstance(threshold, int)
+                and not isinstance(threshold, bool)
+                and 1 <= threshold <= len(node.children)
+            )
+            if not (expected_all or valid_parallel):
+                report.add(
+                    "invalid_parallel_threshold",
+                    f"{path} {node.type} success_threshold is invalid for {len(node.children)} child(ren).",
+                )
         for index, child in enumerate(node.children):
             _validate_bt_node(child, capability_names, robot_id, report, f"{path}.children[{index}]")
         return
@@ -197,59 +199,23 @@ def _validate_bt_node(
         if node.name not in capability_names:
             report.add("invalid_bt_action", f"Robot '{robot_id}' cannot execute BT action '{node.name}' at {path}.")
         return
-    if node.type == "Condition":
+    if node.type in {"Condition", "WaitFor"}:
         if not node.name:
-            report.add("invalid_bt", f"{path} condition is missing name.")
+            report.add("invalid_bt", f"{path} {node.type} is missing name.")
+        if node.type == "WaitFor" and (
+            not isinstance(node.timeout_ticks, int) or isinstance(node.timeout_ticks, bool) or node.timeout_ticks <= 0
+        ):
+            report.add("invalid_wait_timeout", f"{path} WaitFor needs a positive integer timeout_ticks.")
+        return
+    if node.type in {"AcquireResource", "ReleaseResource"}:
+        if not node.name:
+            report.add("invalid_bt", f"{path} {node.type} is missing its resource name.")
+        if node.type == "AcquireResource" and (
+            not isinstance(node.timeout_ticks, int) or isinstance(node.timeout_ticks, bool) or node.timeout_ticks <= 0
+        ):
+            report.add("invalid_resource_timeout", f"{path} AcquireResource needs a positive timeout_ticks.")
         return
     report.add("invalid_bt", f"{path} uses unsupported node type '{node.type}'.")
-
-
-# --------------------------------------------------------------------------- #
-# Action <-> assignment cross-checks
-# --------------------------------------------------------------------------- #
-
-
-def _validate_assigned_actions_present(
-    plan: Plan,
-    tasks: dict[str, dict[str, Any]],
-    assignments: dict[str, str],
-    report: ValidationReport,
-) -> None:
-    leaves_by_robot = {robot: list(iter_leaves(tree)) for robot, tree in plan.behavior_trees.items()}
-    for task_id, robot_id in assignments.items():
-        task = tasks.get(task_id, {})
-        action = task.get("action")
-        parameters = tuple(task.get("parameters", []))
-        leaves = leaves_by_robot.get(robot_id, [])
-        if not _find_action(leaves, action, parameters):
-            report.add(
-                "missing_bt_action",
-                f"Robot '{robot_id}' is assigned task '{task_id}', but its BT lacks action "
-                f"{format_predicate(action or '', parameters)}.",
-            )
-
-
-def _validate_bt_actions_assigned(
-    plan: Plan,
-    tasks: dict[str, dict[str, Any]],
-    assignments: dict[str, str],
-    report: ValidationReport,
-) -> None:
-    assigned_actions = {
-        (robot, tasks[task_id].get("action"), tuple(tasks[task_id].get("parameters", [])))
-        for task_id, robot in assignments.items()
-        if task_id in tasks
-    }
-    for robot_id, tree in plan.behavior_trees.items():
-        for leaf in iter_leaves(tree):
-            if leaf.type != "Action":
-                continue
-            key = (robot_id, leaf.name, tuple(leaf.parameters))
-            if key not in assigned_actions:
-                report.add(
-                    "unassigned_bt_action",
-                    f"Robot '{robot_id}' BT has action {leaf.label()}, but no matching task assignment exists.",
-                )
 
 
 # --------------------------------------------------------------------------- #
@@ -277,7 +243,7 @@ def _validate_predicate_support(
             continue
         leaves = list(iter_leaves(tree))
         for index, leaf in enumerate(leaves):
-            if leaf.type == "Condition":
+            if leaf.type in {"Condition", "WaitFor"}:
                 _check_condition(robot_id, leaves, index, leaf, scenario, initial_state, produced, report, suggest_producers)
             elif leaf.type == "Action":
                 _check_action_preconditions(robot_id, leaf, scenario, initial_state, produced, report, suggest_producers)
@@ -297,12 +263,12 @@ def _check_condition(
     predicate = leaf.label()
     initially = predicate in initial_state
     if initially or predicate in produced:
-        if not initially:
+        if not initially and leaf.type == "Condition":
             _check_condition_after_producer(robot_id, leaves, index, predicate, scenario, report)
         return
     report.add(
-        "unsupported_condition",
-        f"Condition '{predicate}' in robot '{robot_id}' BT is not initially true and no generated action creates it."
+        "unsupported_condition" if leaf.type == "Condition" else "unsupported_wait",
+        f"{leaf.type} '{predicate}' in robot '{robot_id}' BT is not initially true and no generated action creates it."
         f"{_same_name_text(predicate, initial_state | produced, suggest_producers)}"
         f"{_candidate_text(candidate_producers(predicate, scenario), suggest_producers)}",
     )
@@ -365,65 +331,266 @@ def produced_predicates(plan: Plan, scenario: Scenario) -> set[str]:
 
 
 # --------------------------------------------------------------------------- #
-# Synchronization
+# Direct LLM BT schema-v2 contract
 # --------------------------------------------------------------------------- #
 
 
-def _validate_synchronization(
-    plan: Plan, scenario: Scenario, report: ValidationReport, suggest_producers: bool
-) -> None:
-    leaves_by_robot = {robot: list(iter_leaves(tree)) for robot, tree in plan.behavior_trees.items()}
-    for sync in plan.synchronization:
-        if not isinstance(sync, dict):
-            report.add("invalid_synchronization", "Each synchronization entry must be an object.")
-            continue
-        condition = sync.get("condition")
-        producer = sync.get("producer")
-        consumer = sync.get("consumer")
-        if not condition:
-            report.add("invalid_synchronization", "Synchronization entry is missing condition.")
-            continue
-        if producer not in scenario.robot_ids:
-            report.add("unknown_robot", f"Synchronization producer '{producer}' is not a scenario robot.")
-            continue
-        if consumer not in scenario.robot_ids:
-            report.add("unknown_robot", f"Synchronization consumer '{consumer}' is not a scenario robot.")
-            continue
+def _validate_direct_bt_contract(plan: Plan, scenario: Scenario, report: ValidationReport) -> None:
+    if plan.schema_version != "2.0":
+        report.add("unsupported_schema_version", f"Unsupported plan schema_version '{plan.schema_version}'.")
+    if plan.mission_id != scenario.task_id:
+        report.add(
+            "mission_mismatch",
+            f"Plan mission_id '{plan.mission_id}' does not match scenario task_id '{scenario.task_id}'.",
+        )
 
-        producer_leaves = leaves_by_robot.get(producer, [])
-        if _producer_index(producer_leaves, producer, condition, scenario) is None:
-            report.add(
-                "missing_sync_producer",
-                f"Producer '{producer}' never creates synchronization condition '{condition}' in its BT."
-                f"{_same_name_text(condition, produced_predicates(plan, scenario), suggest_producers)}",
-            )
+    seen_nodes: set[str] = set()
+    seen_tasks: set[str] = set()
+    signatures = _predicate_signatures(scenario)
+    for robot_id, tree in plan.behavior_trees.items():
+        robot = scenario.robot(robot_id)
+        if robot is None:
+            continue
+        for node in iter_nodes(tree):
+            if not node.node_id or node.id_generated:
+                report.add("missing_node_id", f"A node in robot '{robot_id}' has no id.")
+            elif node.node_id in seen_nodes:
+                report.add("duplicate_node_id", f"Node id '{node.node_id}' is duplicated.")
+            else:
+                seen_nodes.add(node.node_id)
 
-        consumer_leaves = leaves_by_robot.get(consumer, [])
-        if _find_condition(consumer_leaves, condition) is None:
+            if node.type == "Action":
+                capability = robot.capability(node.name or "")
+                if not node.task_id:
+                    report.add("missing_task_id", f"Action '{node.label()}' on '{robot_id}' has no task_id.")
+                elif node.task_id in seen_tasks:
+                    report.add("duplicate_task_id", f"Action task_id '{node.task_id}' is duplicated.")
+                else:
+                    seen_tasks.add(node.task_id)
+                if capability is not None:
+                    if len(node.parameters) != len(capability.parameters):
+                        report.add(
+                            "action_arity",
+                            f"Action '{node.label()}' on '{robot_id}' expects {len(capability.parameters)} "
+                            f"parameter(s), got {len(node.parameters)}.",
+                        )
+                    unknown = [parameter for parameter in node.parameters if parameter not in scenario.constants]
+                    if unknown:
+                        report.add(
+                            "unknown_constant",
+                            f"Action '{node.label()}' uses unknown constant(s): {', '.join(unknown)}.",
+                        )
+                    if capability.parameter_types and len(node.parameters) == len(capability.parameter_types):
+                        for parameter, expected_type in zip(node.parameters, capability.parameter_types):
+                            actual_type = scenario.constant_type(parameter)
+                            if expected_type == "robot":
+                                matches = parameter in scenario.robot_ids
+                            else:
+                                matches = actual_type == expected_type
+                            if not matches:
+                                report.add(
+                                    "argument_type",
+                                    f"Action '{node.label()}' parameter '{parameter}' must have type "
+                                    f"'{expected_type}', got '{actual_type or 'unknown'}'.",
+                                )
+                    if node.source != "llm":
+                        report.add("invalid_provenance", f"Action '{node.label()}' must have source 'llm'.")
+            elif node.type in {"Condition", "WaitFor"} and node.name:
+                expected = signatures.get(node.name)
+                if expected is None:
+                    report.add("unknown_predicate", f"{node.type} '{node.label()}' uses an unknown predicate.")
+                elif len(node.parameters) != expected:
+                    report.add(
+                        "predicate_arity",
+                        f"{node.type} '{node.label()}' expects {expected} parameter(s), got {len(node.parameters)}.",
+                    )
+                unknown = [parameter for parameter in node.parameters if parameter not in scenario.constants]
+                if unknown:
+                    report.add(
+                        "unknown_constant",
+                        f"{node.type} '{node.label()}' uses unknown constant(s): {', '.join(unknown)}.",
+                    )
+                if node.source != "llm":
+                    report.add("invalid_provenance", f"{node.type} '{node.label()}' must have source 'llm'.")
+            elif node.type in {"AcquireResource", "ReleaseResource"}:
+                if node.name not in scenario.resource_ids:
+                    report.add("unknown_resource", f"{node.type} uses undeclared resource '{node.name}'.")
+                if node.source != "llm":
+                    report.add("invalid_provenance", f"{node.type} '{node.name}' must have source 'llm'.")
+            elif node.type in COMPOSITES and node.source != "llm":
+                report.add("invalid_provenance", f"Composite node '{node.node_id}' must have source 'llm'.")
+
+
+def _predicate_signatures(scenario: Scenario) -> dict[str, int]:
+    signatures: dict[str, int] = {}
+    literals = [*scenario.initial_state, *scenario.goal_state]
+    for robot in scenario.robots:
+        for capability in robot.capabilities:
+            literals.extend(capability.preconditions)
+            literals.extend(capability.effects.add)
+            literals.extend(capability.effects.delete)
+    for literal in literals:
+        name, args = parse_predicate(literal)
+        signatures[name] = max(signatures.get(name, 0), len(args))
+    return signatures
+
+
+def _validate_explicit_waits(plan: Plan, scenario: Scenario, report: ValidationReport) -> None:
+    """Validate cross-robot causality with explicit WaitFor leaves.
+
+    The check is intentionally conservative: local facts must be established by
+    an earlier action in the same flattened execution order; cross-robot facts
+    must have an earlier WaitFor and an actual producer action in another tree.
+    The simulator remains the final dynamic check for composite control flow.
+    """
+    initial = set(scenario.initial_state)
+    produced_by: dict[str, set[str]] = {}
+    for producer, tree in plan.behavior_trees.items():
+        for leaf in iter_leaves(tree):
+            if leaf.type != "Action":
+                continue
+            capability = scenario.capability(producer, leaf.name or "")
+            if capability is None or len(leaf.parameters) != len(capability.parameters):
+                continue
+            bindings = dict(zip(capability.parameters, leaf.parameters))
+            for predicate in positive_effects(capability.effects, bindings):
+                produced_by.setdefault(predicate, set()).add(producer)
+
+    wait_edges: dict[str, set[str]] = {robot: set() for robot in plan.behavior_trees}
+    for robot_id, tree in plan.behavior_trees.items():
+        known = set(initial)
+        waited: set[str] = set()
+        leaves = list(iter_leaves(tree))
+        for leaf in leaves:
+            predicate = leaf.label()
+            if leaf.type == "Condition":
+                # A Condition is a branch/guard and is allowed to fail. It does
+                # not establish a predicate or replace cross-robot WaitFor.
+                continue
+            if leaf.type == "WaitFor":
+                if predicate in known:
+                    report.add(
+                        "redundant_wait",
+                        f"WaitFor '{predicate}' on '{robot_id}' is already guaranteed true at this point.",
+                    )
+                producers = produced_by.get(predicate, set()) - {robot_id}
+                if not producers:
+                    local = robot_id in produced_by.get(predicate, set())
+                    report.add(
+                        "same_robot_wait" if local else "missing_wait_producer",
+                        f"WaitFor '{predicate}' on '{robot_id}' has no producer action in another robot's tree.",
+                    )
+                wait_edges[robot_id].update(producers)
+                waited.add(predicate)
+                known.add(predicate)
+                continue
+            if leaf.type != "Action":
+                continue
+            capability = scenario.capability(robot_id, leaf.name or "")
+            if capability is None or len(leaf.parameters) != len(capability.parameters):
+                continue
+            bindings = dict(zip(capability.parameters, leaf.parameters))
+            for template in capability.preconditions:
+                needed = substitute(template, bindings)
+                if needed in known:
+                    continue
+                external = produced_by.get(needed, set()) - {robot_id}
+                if external and needed not in waited:
+                    report.add(
+                        "missing_wait_for",
+                        f"Action '{leaf.label()}' on '{robot_id}' consumes cross-robot predicate '{needed}' "
+                        "without an earlier exact WaitFor.",
+                    )
+                elif not external:
+                    report.add(
+                        "precondition_not_ordered",
+                        f"Action '{leaf.label()}' on '{robot_id}' needs '{needed}' before any local action "
+                        "or explicit cross-robot wait establishes it.",
+                    )
+            adds, deletes = ground_effects(capability.effects, bindings)
+            apply_grounded(known, adds, deletes)
+
+    cycle = _wait_cycle(wait_edges)
+    if cycle:
+        report.add("wait_cycle", f"Cross-robot WaitFor dependency cycle: {' -> '.join(cycle)}.")
+
+
+def _validate_resources(plan: Plan, scenario: Scenario, report: ValidationReport) -> None:
+    resource_edges: dict[str, set[str]] = {resource: set() for resource in scenario.resource_ids}
+    for robot_id, tree in plan.behavior_trees.items():
+        held: set[str] = set()
+        for leaf in iter_leaves(tree):
+            if leaf.type == "AcquireResource":
+                resource = leaf.name or ""
+                if resource in held:
+                    report.add(
+                        "double_acquire",
+                        f"Robot '{robot_id}' acquires resource '{resource}' while already owning it.",
+                    )
+                for owner in held:
+                    resource_edges.setdefault(owner, set()).add(resource)
+                held.add(resource)
+            elif leaf.type == "ReleaseResource":
+                resource = leaf.name or ""
+                if resource not in held:
+                    report.add(
+                        "release_without_acquire",
+                        f"Robot '{robot_id}' releases resource '{resource}' without owning it.",
+                    )
+                held.discard(resource)
+            elif leaf.type == "Action":
+                capability = scenario.capability(robot_id, leaf.name or "")
+                missing = set(capability.resources if capability else ()) - held
+                if missing:
+                    report.add(
+                        "resource_not_dominating_action",
+                        f"Action '{leaf.label()}' on '{robot_id}' is not dominated by acquisition of "
+                        f"{', '.join(sorted(missing))}.",
+                    )
+        if held:
             report.add(
-                "missing_sync_condition",
-                f"Consumer '{consumer}' BT must include Condition '{condition}' for synchronization.",
+                "resource_not_released",
+                f"Robot '{robot_id}' can finish while still owning: {', '.join(sorted(held))}.",
             )
+    cycle = _wait_cycle(resource_edges)
+    if cycle:
+        report.add("resource_cycle", f"Static resource acquisition cycle: {' -> '.join(cycle)}.")
+
+
+def _wait_cycle(edges: dict[str, set[str]]) -> list[str]:
+    visiting: list[str] = []
+    visited: set[str] = set()
+
+    def visit(node: str) -> list[str]:
+        if node in visiting:
+            start = visiting.index(node)
+            return [*visiting[start:], node]
+        if node in visited:
+            return []
+        visiting.append(node)
+        for dependency in edges.get(node, set()):
+            found = visit(dependency)
+            if found:
+                return found
+        visiting.pop()
+        visited.add(node)
+        return []
+
+    for node in edges:
+        found = visit(node)
+        if found:
+            return found
+    return []
+
+
+# --------------------------------------------------------------------------- #
+# Synchronization
+# --------------------------------------------------------------------------- #
 
 
 # --------------------------------------------------------------------------- #
 # Helpers
 # --------------------------------------------------------------------------- #
-
-
-def _find_action(leaves: list[BTNode], name: str | None, parameters: tuple[str, ...]) -> bool:
-    return any(
-        leaf.type == "Action" and leaf.name == name and tuple(leaf.parameters) == parameters
-        for leaf in leaves
-    )
-
-
-def _find_condition(leaves: list[BTNode], condition: str) -> int | None:
-    name, args = parse_predicate(condition)
-    for index, leaf in enumerate(leaves):
-        if leaf.type == "Condition" and leaf.name == name and list(leaf.parameters) == args:
-            return index
-    return None
 
 
 def _producer_index(leaves: list[BTNode], robot_id: str, target: str, scenario: Scenario) -> int | None:

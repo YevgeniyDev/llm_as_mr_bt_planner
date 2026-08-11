@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import warnings
-
 import pytest
 
 from llm_mr_bt_planner.domain import (
@@ -19,25 +17,9 @@ def test_explicit_effects_parsed():
     assert effects == Effects(add=("p(x)",), delete=("q(x)",))
 
 
-def test_legacy_effects_convert_with_deprecation_warning():
-    with pytest.warns(DeprecationWarning):
-        effects = normalize_effects(["holding(r, x)", "not_at(x)"], "r", "cap")
-    assert effects.add == ("holding(r, x)",)
-    assert effects.delete == ("at(x)",)
-
-
-def test_legacy_and_explicit_effects_are_equivalent():
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", DeprecationWarning)
-        legacy = normalize_effects(["tool_at(t, loc)", "not_holding(r, t)"], "r", "place")
-    # The explicit form must add a functional prefix-delete to match legacy '_at' semantics.
-    explicit = Effects(add=("tool_at(t, loc)",), delete=("tool_at(t)", "holding(r, t)"))
-
-    state_legacy = {"tool_at(t, old)", "holding(r, t)"}
-    state_explicit = set(state_legacy)
-    apply_grounded(state_legacy, *ground_effects(Effects(add=legacy.add, delete=("tool_at(t)", *legacy.delete)), {}))
-    apply_grounded(state_explicit, *ground_effects(explicit, {}))
-    assert state_legacy == state_explicit == {"tool_at(t, loc)"}
+def test_legacy_effect_list_is_rejected():
+    with pytest.raises(ScenarioError, match="add/delete object"):
+        normalize_effects(["holding(r, x)"], "r", "cap")
 
 
 def test_apply_grounded_functional_fluent_replaces_location():
@@ -58,9 +40,10 @@ def test_parse_scenario_requires_fields():
         parse_scenario({"task_id": "t"})
 
 
-def test_scenario_helpers(gear_scenario):
-    assert gear_scenario.robot("go2_z1") is not None
-    assert "go2_z1" in gear_scenario.robot_ids
-    assert "parts_drawer" in gear_scenario.constants
-    cap = gear_scenario.capability("go2_z1", "open_drawer")
-    assert cap is not None and cap.effects.add == ("drawer_open(drawer)",)
+def test_scenario_helpers(courier_scenario):
+    assert courier_scenario.robot("unitree_go2_z1") is not None
+    assert courier_scenario.robot_ids == {"franka_a", "unitree_go2_z1", "franka_b"}
+    assert "source_dock" in courier_scenario.constants
+    capability = courier_scenario.capability("unitree_go2_z1", "navigate_destination")
+    assert capability is not None
+    assert capability.effects.add == ("docked(unitree_go2_z1, destination_dock)",)

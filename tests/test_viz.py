@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from llm_mr_bt_planner.bt import iter_nodes
 from llm_mr_bt_planner.simulation import simulate
 from llm_mr_bt_planner.viz import bt_to_mermaid, plan_to_html
 
@@ -14,8 +15,8 @@ def test_bt_to_mermaid_shapes(toy_plan):
 
 
 def test_mermaid_has_one_edge_per_child(toy_plan):
-    # B: Sequence + Condition + Action = 3 nodes, 2 edges.
-    assert bt_to_mermaid(toy_plan.behavior_trees["B"]).count("-->") == 2
+    tree = toy_plan.behavior_trees["B"]
+    assert bt_to_mermaid(tree).count("-->") == len(list(iter_nodes(tree))) - 1
 
 
 def test_plan_to_html_bundles_every_robot(toy_plan):

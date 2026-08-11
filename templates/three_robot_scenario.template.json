@@ -1,0 +1,70 @@
+{
+  "schema_version": "1.0",
+  "task_id": "replace_with_task_id",
+  "instruction": "Describe the three-robot mission and coordination requirements.",
+  "initial_state": ["system_ready()", "at(payload,source)"],
+  "goal_state": ["at(payload,destination)"],
+  "entities": [
+    {"id": "payload", "type": "part"},
+    {"id": "source", "type": "location"},
+    {"id": "destination", "type": "location"},
+    {"id": "shared_zone", "type": "zone"}
+  ],
+  "resources": [{"id": "shared_zone", "capacity": 1}],
+  "robots": [
+    {
+      "id": "franka_a",
+      "name": "Franka Emika Panda A",
+      "type": "fixed_manipulator",
+      "capabilities": [
+        {
+          "name": "move_payload",
+          "parameters": ["part", "from", "to"],
+          "parameter_types": ["part", "location", "location"],
+          "resources": ["shared_zone"],
+          "action_type": "manipulation",
+          "duration_ticks": 2,
+          "timeout_ticks": 10,
+          "preconditions": ["system_ready()", "at(part,from)"],
+          "effects": {"add": ["at(part,to)"], "delete": ["at(part)"]}
+        }
+      ]
+    },
+    {
+      "id": "unitree_go2_z1",
+      "name": "Unitree Go2 with Z1 arm",
+      "type": "mobile_manipulator",
+      "capabilities": [
+        {
+          "name": "verify_ready",
+          "parameters": [],
+          "parameter_types": [],
+          "resources": [],
+          "action_type": "verification",
+          "duration_ticks": 1,
+          "timeout_ticks": 5,
+          "preconditions": ["system_ready()"],
+          "effects": {"add": ["robot_ready(unitree_go2_z1)"], "delete": []}
+        }
+      ]
+    },
+    {
+      "id": "franka_b",
+      "name": "Franka Emika Panda B",
+      "type": "fixed_manipulator",
+      "capabilities": [
+        {
+          "name": "verify_ready",
+          "parameters": [],
+          "parameter_types": [],
+          "resources": [],
+          "action_type": "verification",
+          "duration_ticks": 1,
+          "timeout_ticks": 5,
+          "preconditions": ["system_ready()"],
+          "effects": {"add": ["robot_ready(franka_b)"], "delete": []}
+        }
+      ]
+    }
+  ]
+}

@@ -1,26 +1,24 @@
-"""The generate -> validate -> simulate -> self-correct loop (Algorithm 1)."""
+"""Real LLM generation, deterministic evaluation, and bounded correction."""
 
 from __future__ import annotations
 
 import time
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Callable
 
 from .domain import Scenario
 from .llm.base import LLMClient
 from .plan import Plan, parse_plan
-from .prompts import (
-    SYSTEM_PROMPT,
-    build_action_plan_correction_prompt,
-    build_action_plan_prompt,
-    build_bt_encoding_correction_prompt,
-    build_bt_encoding_prompt,
-    build_correction_prompt,
-    build_prompt,
-    extract_json,
-)
+from .prompts import SYSTEM_PROMPT, build_correction_prompt, build_prompt, extract_json
 from .simulation import SimulationReport, simulate, skipped_simulation
 from .validation import ValidationReport, validate_plan
+
+ProgressCallback = Callable[[str, float], None]
+CancellationCheck = Callable[[], bool]
+
+
+class PlanningCancelled(RuntimeError):
+    """Raised after a user cancellation and before any final artifact is published."""
 
 
 @dataclass
@@ -36,8 +34,6 @@ class PlannerResult:
     validation_errors: list[dict[str, str]]
     simulation: dict[str, Any]
     wall_seconds: float = 0.0
-    metric_scope: str = "shared_validator_simulator"
-    native_metrics: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -52,8 +48,6 @@ class PlannerResult:
             "plan": self.plan,
             "validation_errors": self.validation_errors,
             "simulation": self.simulation,
-            "metric_scope": self.metric_scope,
-            "native_metrics": self.native_metrics or {},
         }
 
 
@@ -61,36 +55,66 @@ def run_planner(
     scenario: Scenario,
     client: LLMClient,
     max_corrections: int = 4,
-    max_ticks: int = 80,
-    include_hints: bool = False,
-    suggest_producers: bool = False,
-    samples: int = 1,
-    two_stage: bool = False,
-    skills_section: str = "",
+    max_ticks: int = 100,
+    *,
+    progress: ProgressCallback | None = None,
+    cancelled: CancellationCheck | None = None,
 ) -> PlannerResult:
-    """Run Algorithm 1.
-
-    Default mode is *pure*: the LLM gets the instruction, explicit scenario and
-    capability model, output schema, and a general task-agnostic method; the
-    validator reports problems without naming specific producer actions.
-    ``include_hints`` / ``suggest_producers`` enable the assisted (ablation)
-    condition. ``samples`` > 1 enables best-of-N. ``two_stage`` decomposes
-    generation: the LLM first emits an ordered per-robot action plan (validated
-    on its own by running it as condition-free sequences), then encodes that
-    fixed action plan into behavior trees with explicit synchronization. Set
-    ``max_corrections=0`` for single-shot generation. ``skills_section`` is an
-    optional pre-rendered block of Markdown-authored planning guidance (see
-    :mod:`llm_mr_bt_planner.skills`) injected into every generation/correction
-    prompt; empty by default so pure-mode prompts are unchanged.
-    """
+    """Run one initial request followed by at most ``max_corrections`` repairs."""
     start = time.monotonic()
-    generate = _two_stage_generate if two_stage else _generate_evaluated
-    plan, validation, simulation, rounds = generate(
-        scenario, client,
-        max_corrections=max_corrections, max_ticks=max_ticks,
-        include_hints=include_hints, suggest_producers=suggest_producers, samples=samples,
-        skills_section=skills_section,
+    _check_cancelled(cancelled)
+    _notify(progress, "Building the initial planning prompt", 0.02)
+    prompt = build_prompt(scenario)
+
+    plan, validation, simulation = _request_and_evaluate(
+        client,
+        prompt,
+        scenario,
+        max_ticks=max_ticks,
+        label="Initial candidate",
+        start_fraction=0.06,
+        end_fraction=0.42,
+        progress=progress,
+        cancelled=cancelled,
     )
+    rounds = 0
+
+    while rounds < max_corrections and not (validation.valid and simulation.success):
+        rounds += 1
+        _check_cancelled(cancelled)
+        error_types = sorted({error.type for error in validation.errors})
+        simulation_types = sorted({str(error.get("type", "simulation_error")) for error in simulation.errors})
+        reasons = ", ".join([*error_types, *simulation_types]) or "goal not reached"
+        _notify(progress, f"Correction round {rounds}/{max_corrections} started: {reasons}", 0.44)
+        correction = build_correction_prompt(
+            scenario,
+            validation.to_dicts(),
+            simulation,
+            previous_plan=plan.raw or plan.to_dict(),
+        )
+        span_start = 0.44 + (rounds - 1) * (0.46 / max(1, max_corrections))
+        span_end = 0.44 + rounds * (0.46 / max(1, max_corrections))
+        plan, validation, simulation = _request_and_evaluate(
+            client,
+            correction,
+            scenario,
+            max_ticks=max_ticks,
+            label=f"Correction round {rounds}",
+            start_fraction=span_start,
+            end_fraction=span_end,
+            progress=progress,
+            cancelled=cancelled,
+        )
+
+    accepted = validation.valid and simulation.success
+    if accepted:
+        _notify(progress, "Candidate accepted: validation passed and all symbolic goals were reached", 0.94)
+    else:
+        _notify(
+            progress,
+            f"Candidate rejected after {rounds} correction round(s); no final BT will be published",
+            0.94,
+        )
     return PlannerResult(
         task_id=scenario.task_id,
         provider=getattr(client, "name", "unknown"),
@@ -99,184 +123,74 @@ def run_planner(
         success=simulation.success,
         goal_success=simulation.goal_success,
         correction_rounds=rounds,
-        plan=plan.to_dict(),
+        # Keep the exact extracted candidate for the independent service-level
+        # recheck. Invalid/unknown fields must never disappear through parsing.
+        plan=plan.raw or plan.to_dict(),
         validation_errors=validation.to_dicts(),
-        simulation={
-            "final_state": simulation.final_state,
-            "trace": simulation.trace,
-            "errors": simulation.errors,
-        },
+        simulation=simulation.to_dict(),
         wall_seconds=time.monotonic() - start,
     )
 
 
-def _generate_evaluated(
-    scenario: Scenario,
-    client: LLMClient,
-    max_corrections: int,
-    max_ticks: int,
-    include_hints: bool,
-    suggest_producers: bool,
-    samples: int,
-    skills_section: str = "",
-) -> tuple[Plan, ValidationReport, SimulationReport, int]:
-    prompt = build_prompt(scenario, include_hints=include_hints, skills_section=skills_section)
-    plan, validation, simulation = _generate_best(
-        client, prompt, scenario, samples, max_ticks, suggest_producers
-    )
-    rounds = 0
-
-    while rounds < max_corrections and not (validation.valid and simulation.success):
-        rounds += 1
-        correction = build_correction_prompt(
-            scenario, validation.to_dicts(), simulation,
-            previous_plan=plan.to_dict(), include_hints=include_hints, skills_section=skills_section,
-        )
-        plan, validation, simulation = _generate_best(
-            client, correction, scenario, samples, max_ticks, suggest_producers
-        )
-
-    return plan, validation, simulation, rounds
-
-
-def _generate_best(
+def _request_and_evaluate(
     client: LLMClient,
     prompt: str,
     scenario: Scenario,
-    samples: int,
+    *,
     max_ticks: int,
-    suggest_producers: bool,
+    label: str,
+    start_fraction: float,
+    end_fraction: float,
+    progress: ProgressCallback | None,
+    cancelled: CancellationCheck | None,
 ) -> tuple[Plan, ValidationReport, SimulationReport]:
-    """Generate up to ``samples`` candidate plans, returning the best one.
-
-    Stops early on the first valid+successful candidate. With ``samples == 1``
-    this is a single generation. Ranking: (valid and success) > valid >
-    fewer validation errors.
-    """
-    best: tuple[Plan, ValidationReport, SimulationReport, tuple] | None = None
-    for _ in range(max(1, samples)):
-        plan = _query_plan(client, prompt, scenario)
-        validation = validate_plan(plan, scenario, suggest_producers=suggest_producers)
-        simulation = simulate(plan, scenario, max_ticks=max_ticks) if validation.valid else skipped_simulation()
-        score = (validation.valid and simulation.success, validation.valid, -len(validation.errors))
-        if best is None or score > best[3]:
-            best = (plan, validation, simulation, score)
-        if validation.valid and simulation.success:
-            break
-    assert best is not None
-    return best[0], best[1], best[2]
-
-
-def _query_plan(client: LLMClient, prompt: str, scenario: Scenario) -> Plan:
+    span = end_fraction - start_fraction
+    _check_cancelled(cancelled)
+    _notify(progress, f"{label}: sending request to {getattr(client, 'name', 'provider')}", start_fraction)
     raw_text = client.complete(SYSTEM_PROMPT, prompt)
-    raw = extract_json(raw_text)
-    raw.setdefault("task_id", scenario.task_id)
-    return parse_plan(raw)
+    _check_cancelled(cancelled)
+    _notify(progress, f"{label}: provider response received", start_fraction + span * 0.35)
 
+    try:
+        _notify(progress, f"{label}: parsing the complete LLM-generated BT", start_fraction + span * 0.45)
+        candidate = extract_json(raw_text)
+        plan = parse_plan(candidate)
+    except (TypeError, ValueError) as error:
+        plan = parse_plan({})
+        validation = ValidationReport()
+        validation.add("invalid_llm_json", str(error))
+        _notify(progress, f"{label}: response rejected during JSON parsing: {error}", end_fraction)
+        return plan, validation, skipped_simulation()
 
-# --------------------------------------------------------------------------- #
-# Two-stage generation: action plan -> behavior trees
-# --------------------------------------------------------------------------- #
-
-
-def _two_stage_generate(
-    scenario: Scenario,
-    client: LLMClient,
-    max_corrections: int,
-    max_ticks: int,
-    include_hints: bool,
-    suggest_producers: bool,
-    samples: int,
-    skills_section: str = "",
-) -> tuple[Plan, ValidationReport, SimulationReport, int]:
-    # Stage 1: a feasible, ordered per-robot action plan (no conditions/sync).
-    action_plan, validation, simulation = _generate_best_actions(
-        client, build_action_plan_prompt(scenario, include_hints=include_hints, skills_section=skills_section),
-        scenario, samples, max_ticks, suggest_producers,
-    )
-    rounds = 0
-    while rounds < max_corrections and not (validation.valid and simulation.success):
-        rounds += 1
-        prompt = build_action_plan_correction_prompt(
-            scenario, validation.to_dicts(), simulation, action_plan,
-            include_hints=include_hints, skills_section=skills_section,
+    _check_cancelled(cancelled)
+    _notify(progress, f"{label}: running static validation", start_fraction + span * 0.72)
+    validation = validate_plan(plan, scenario, suggest_producers=True)
+    if not validation.valid:
+        kinds = ", ".join(sorted({error.type for error in validation.errors}))
+        _notify(
+            progress,
+            f"{label}: static validation failed with {len(validation.errors)} error(s): {kinds}",
+            end_fraction,
         )
-        action_plan, validation, simulation = _generate_best_actions(
-            client, prompt, scenario, samples, max_ticks, suggest_producers
-        )
+        return plan, validation, skipped_simulation()
 
-    # Stage 2: encode the fixed action plan as behavior trees with synchronization.
-    plan, validation, simulation = _generate_best(
-        client, build_bt_encoding_prompt(scenario, action_plan, include_hints=include_hints,
-                                         skills_section=skills_section),
-        scenario, samples, max_ticks, suggest_producers,
-    )
-    while rounds < 2 * max_corrections and not (validation.valid and simulation.success):
-        rounds += 1
-        prompt = build_bt_encoding_correction_prompt(
-            scenario, validation.to_dicts(), simulation, plan.to_dict(), action_plan,
-            include_hints=include_hints, skills_section=skills_section,
-        )
-        plan, validation, simulation = _generate_best(
-            client, prompt, scenario, samples, max_ticks, suggest_producers
-        )
-
-    return plan, validation, simulation, rounds
+    _notify(progress, f"{label}: static validation passed", start_fraction + span * 0.82)
+    _check_cancelled(cancelled)
+    _notify(progress, f"{label}: running deterministic contract simulation", start_fraction + span * 0.88)
+    simulation = simulate(plan, scenario, max_ticks=max_ticks)
+    if simulation.success:
+        _notify(progress, f"{label}: contract simulation passed", end_fraction)
+    else:
+        kinds = ", ".join(sorted({str(error.get("type", "simulation_error")) for error in simulation.errors}))
+        _notify(progress, f"{label}: contract simulation failed: {kinds}", end_fraction)
+    return plan, validation, simulation
 
 
-def _generate_best_actions(
-    client: LLMClient,
-    prompt: str,
-    scenario: Scenario,
-    samples: int,
-    max_ticks: int,
-    suggest_producers: bool,
-) -> tuple[dict[str, Any], ValidationReport, SimulationReport]:
-    """Sample action plans; rank by feasibility of the condition-free sequences."""
-    best: tuple[dict[str, Any], ValidationReport, SimulationReport, tuple] | None = None
-    for _ in range(max(1, samples)):
-        raw = extract_json(client.complete(SYSTEM_PROMPT, prompt))
-        action_plan = raw.get("action_plan", raw) if isinstance(raw, dict) else {}
-        plan = _synthesize_plan(action_plan)
-        validation = validate_plan(plan, scenario, suggest_producers=suggest_producers)
-        simulation = simulate(plan, scenario, max_ticks=max_ticks) if validation.valid else skipped_simulation()
-        score = (validation.valid and simulation.success, validation.valid, -len(validation.errors))
-        if best is None or score > best[3]:
-            best = (action_plan, validation, simulation, score)
-        if validation.valid and simulation.success:
-            break
-    assert best is not None
-    return best[0], best[1], best[2]
+def _notify(callback: ProgressCallback | None, message: str, fraction: float) -> None:
+    if callback is not None:
+        callback(message, max(0.0, min(1.0, fraction)))
 
 
-def _synthesize_plan(action_plan: dict[str, Any]) -> Plan:
-    """Turn an action plan into a condition-free Plan: each robot is a Sequence of
-    its actions, with a matching task graph and assignments. Inter-robot ordering
-    is checked by the simulator (actions block until their preconditions hold), so
-    a feasible action plan simulates to success even without explicit conditions.
-    """
-    task_graph: list[dict[str, Any]] = []
-    assignments: list[dict[str, Any]] = []
-    behavior_trees: dict[str, Any] = {}
-    for robot, actions in (action_plan or {}).items():
-        if not isinstance(actions, list):
-            continue
-        children = []
-        for index, action in enumerate(actions):
-            if not isinstance(action, dict):
-                continue
-            name = action.get("action")
-            parameters = action.get("parameters", [])
-            children.append({"type": "Action", "name": name, "parameters": parameters})
-            task_id = f"{robot}__{index}"
-            task_graph.append({"id": task_id, "action": name, "parameters": parameters, "depends_on": []})
-            assignments.append({"task_id": task_id, "robot": robot})
-        behavior_trees[robot] = {"type": "Sequence", "children": children}
-    return parse_plan(
-        {
-            "task_graph": task_graph,
-            "assignments": assignments,
-            "synchronization": [],
-            "behavior_trees": behavior_trees,
-        }
-    )
+def _check_cancelled(cancelled: CancellationCheck | None) -> None:
+    if cancelled is not None and cancelled():
+        raise PlanningCancelled("Pipeline cancelled by the user; no final BT was published.")

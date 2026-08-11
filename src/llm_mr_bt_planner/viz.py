@@ -7,7 +7,7 @@ opens directly in a browser); the diagram *definitions* are plain text, so they
 also paste straight into GitHub Markdown or https://mermaid.live.
 
 Node shapes: composites (Sequence/Fallback/Parallel) are rectangles, Actions are
-stadiums, Conditions are hexagons.
+stadiums, and Condition/WaitFor guards are hexagons.
 """
 
 from __future__ import annotations
@@ -15,7 +15,7 @@ from __future__ import annotations
 import html
 from typing import Any
 
-from .bt import BTNode
+from .bt import COMPOSITES, BTNode
 from .plan import Plan
 
 _MERMAID_CDN = "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs"
@@ -41,9 +41,9 @@ def _node_label(node: BTNode) -> str:
 def _category(node: BTNode) -> str:
     if node.type == "Action":
         return "action"
-    if node.type == "Condition":
+    if node.type in {"Condition", "WaitFor"}:
         return "condition"
-    if node.type in {"Sequence", "Fallback", "Parallel"}:
+    if node.type in COMPOSITES:
         return "composite"
     return "other"
 
@@ -158,12 +158,17 @@ def _action_plan_section(trace: list[dict[str, Any]]) -> str:
     for step, event in enumerate(trace, start=1):
         robot = str(event.get("robot", ""))
         tick = str(event.get("tick", ""))
-        if event.get("event") == "action":
+        event_type = event.get("event")
+        if event_type in {"action", "action_running", "action_skipped"}:
             node_type, node = "Action", str(event.get("action", ""))
             detail = _format_effects(event.get("effects", {}))
+        elif event_type in {"resource_acquired", "resource_released"}:
+            node_type, node = "Resource", str(event.get("resource", ""))
+            detail = "acquired" if event_type == "resource_acquired" else "released"
         else:
-            node_type, node = "Condition", str(event.get("condition", ""))
-            detail = "wait satisfied"
+            node_type = "WaitFor" if event_type == "wait_satisfied" else "Condition"
+            node = str(event.get("condition", ""))
+            detail = "wait satisfied" if node_type == "WaitFor" else "assertion satisfied"
         rows.append(
             f"<tr>"
             f"<td class='num'>{step}</td>"

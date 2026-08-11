@@ -11,20 +11,18 @@ naming conventions of the original prototype:
   an explicit prefix delete ``tray_at(tray)`` instead of relying on a ``_at``
   suffix rule.
 
-Legacy scenarios that still use a flat list of string effects (with the
-``not_`` negation convention) are converted on load by :func:`normalize_effects`,
-which emits a :class:`DeprecationWarning` so the conversion is never silent.
+Only the explicit effect form is accepted by the active schema and parser.
 """
 
 from __future__ import annotations
 
 import json
-import warnings
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from .predicates import (
+    canonical_predicate,
     format_predicate,
     matches_pattern,
     parse_predicate,
@@ -47,6 +45,23 @@ class Capability:
     parameters: tuple[str, ...]
     preconditions: tuple[str, ...]
     effects: Effects
+    parameter_types: tuple[str, ...] = ()
+    resources: tuple[str, ...] = ()
+    action_type: str = "task"
+    duration_ticks: int = 1
+    timeout_ticks: int = 20
+
+
+@dataclass(frozen=True)
+class Entity:
+    id: str
+    type: str
+
+
+@dataclass(frozen=True)
+class Resource:
+    id: str
+    capacity: int = 1
 
 
 @dataclass(frozen=True)
@@ -73,6 +88,9 @@ class Scenario:
     objects: tuple[str, ...]
     locations: tuple[str, ...]
     robots: tuple[Robot, ...]
+    schema_version: str = "1.0"
+    entities: tuple[Entity, ...] = ()
+    resources: tuple[Resource, ...] = ()
 
     def robot(self, robot_id: str) -> Robot | None:
         return next((robot for robot in self.robots if robot.id == robot_id), None)
@@ -83,7 +101,18 @@ class Scenario:
 
     @property
     def constants(self) -> set[str]:
-        return set(self.objects) | set(self.locations) | self.robot_ids
+        return set(self.objects) | set(self.locations) | {entity.id for entity in self.entities} | self.robot_ids
+
+    @property
+    def resource_ids(self) -> set[str]:
+        return {resource.id for resource in self.resources}
+
+    def constant_type(self, constant: str) -> str | None:
+        robot = self.robot(constant)
+        if robot is not None:
+            return robot.type
+        entity = next((entity for entity in self.entities if entity.id == constant), None)
+        return entity.type if entity else None
 
     def capability(self, robot_id: str, action: str) -> Capability | None:
         robot = self.robot(robot_id)
@@ -171,25 +200,205 @@ class ScenarioError(ValueError):
     """Raised when a scenario file is structurally invalid."""
 
 
-def load_scenario(path: str | Path) -> Scenario:
+SCENARIO_SCHEMA_PATH = Path(__file__).resolve().parents[2] / "schemas" / "scenario.schema.json"
+
+
+def load_scenario(path: str | Path, *, strict: bool | None = None) -> Scenario:
     data = json.loads(Path(path).read_text(encoding="utf-8"))
-    return parse_scenario(data)
+    use_strict = "schema_version" in data if strict is None else strict
+    return parse_scenario(data, strict=use_strict)
 
 
-def parse_scenario(data: dict[str, Any]) -> Scenario:
+def parse_scenario(data: dict[str, Any], *, strict: bool = False) -> Scenario:
+    if not isinstance(data, dict):
+        raise ScenarioError("Scenario JSON root must be an object.")
+    if strict:
+        _validate_json_schema(data)
     _require(data, ["task_id", "instruction", "initial_state", "goal_state", "robots"])
     robots = tuple(_parse_robot(robot) for robot in data.get("robots", []))
     if not robots:
         raise ScenarioError("Scenario must define at least one robot.")
-    return Scenario(
+    entities = tuple(
+        Entity(id=str(entity["id"]), type=str(entity["type"]))
+        for entity in data.get("entities", [])
+        if isinstance(entity, dict) and "id" in entity and "type" in entity
+    )
+    resources = tuple(
+        Resource(id=str(resource["id"]), capacity=int(resource.get("capacity", 1)))
+        for resource in data.get("resources", [])
+        if isinstance(resource, dict) and "id" in resource
+    )
+    derived_objects = tuple(
+        entity.id for entity in entities if entity.type in {"part", "carrier", "tool", "object"}
+    )
+    derived_locations = tuple(
+        entity.id for entity in entities if entity.type in {"location", "dock", "zone", "route", "fixture"}
+    )
+    scenario = Scenario(
         task_id=str(data["task_id"]),
         instruction=str(data["instruction"]),
-        initial_state=tuple(data.get("initial_state", [])),
-        goal_state=tuple(data.get("goal_state", [])),
-        objects=tuple(data.get("objects", [])),
-        locations=tuple(data.get("locations", [])),
+        initial_state=tuple(canonical_predicate(item) for item in data.get("initial_state", [])),
+        goal_state=tuple(canonical_predicate(item) for item in data.get("goal_state", [])),
+        objects=tuple(data.get("objects", derived_objects)),
+        locations=tuple(data.get("locations", derived_locations)),
         robots=robots,
+        schema_version=str(data.get("schema_version", "legacy")),
+        entities=entities,
+        resources=resources,
     )
+    _validate_scenario_semantics(scenario)
+    return scenario
+
+
+def scenario_to_dict(scenario: Scenario) -> dict[str, Any]:
+    """Return the canonical, upload-compatible scenario document."""
+    return {
+        "schema_version": scenario.schema_version if scenario.schema_version != "legacy" else "1.0",
+        "task_id": scenario.task_id,
+        "instruction": scenario.instruction,
+        "initial_state": list(scenario.initial_state),
+        "goal_state": list(scenario.goal_state),
+        "entities": [{"id": entity.id, "type": entity.type} for entity in scenario.entities],
+        "resources": [{"id": resource.id, "capacity": resource.capacity} for resource in scenario.resources],
+        "robots": [
+            {
+                "id": robot.id,
+                "name": robot.name,
+                "type": robot.type,
+                "capabilities": [
+                    {
+                        "name": capability.name,
+                        "parameters": list(capability.parameters),
+                        "parameter_types": list(capability.parameter_types),
+                        "resources": list(capability.resources),
+                        "action_type": capability.action_type,
+                        "duration_ticks": capability.duration_ticks,
+                        "timeout_ticks": capability.timeout_ticks,
+                        "preconditions": list(capability.preconditions),
+                        "effects": {
+                            "add": list(capability.effects.add),
+                            "delete": list(capability.effects.delete),
+                        },
+                    }
+                    for capability in robot.capabilities
+                ],
+            }
+            for robot in scenario.robots
+        ],
+    }
+
+
+def _validate_json_schema(data: dict[str, Any]) -> None:
+    try:
+        from jsonschema import Draft202012Validator
+    except ImportError as error:  # pragma: no cover - declared runtime dependency
+        raise ScenarioError("Strict scenario validation requires the 'jsonschema' package.") from error
+    if not SCENARIO_SCHEMA_PATH.exists():
+        raise ScenarioError(f"Bundled scenario schema is missing: {SCENARIO_SCHEMA_PATH}")
+    schema = json.loads(SCENARIO_SCHEMA_PATH.read_text(encoding="utf-8"))
+    errors = sorted(Draft202012Validator(schema).iter_errors(data), key=lambda item: list(item.path))
+    if errors:
+        rendered = []
+        for schema_error in errors[:12]:
+            path = ".".join(str(part) for part in schema_error.absolute_path) or "$"
+            rendered.append(f"{path}: {schema_error.message}")
+        suffix = f" (+{len(errors) - 12} more)" if len(errors) > 12 else ""
+        raise ScenarioError("Scenario JSON Schema validation failed: " + "; ".join(rendered) + suffix)
+
+
+def _validate_scenario_semantics(scenario: Scenario) -> None:
+    robot_ids = [robot.id for robot in scenario.robots]
+    if len(robot_ids) != len(set(robot_ids)):
+        raise ScenarioError("Robot ids must be unique.")
+    constants = scenario.constants
+    entity_ids = [entity.id for entity in scenario.entities]
+    if len(entity_ids) != len(set(entity_ids)):
+        raise ScenarioError("Entity ids must be unique.")
+    overlap = set(entity_ids) & scenario.robot_ids
+    if overlap:
+        raise ScenarioError(f"Entity and robot ids overlap: {', '.join(sorted(overlap))}.")
+    resource_ids = [resource.id for resource in scenario.resources]
+    if len(resource_ids) != len(set(resource_ids)):
+        raise ScenarioError("Resource ids must be unique.")
+    if set(resource_ids) - constants:
+        raise ScenarioError("Every resource id must name a declared entity.")
+    arities: dict[str, int] = {}
+    full_literals: list[tuple[str, str]] = [
+        *((literal, "state") for literal in (*scenario.initial_state, *scenario.goal_state)),
+        *(
+            (literal, f"{robot.id}.{capability.name}")
+            for robot in scenario.robots
+            for capability in robot.capabilities
+            for literal in (*capability.preconditions, *capability.effects.add)
+        ),
+    ]
+    for literal, where in full_literals:
+        name, args = parse_predicate(literal)
+        previous = arities.setdefault(name, len(args))
+        if previous != len(args):
+            raise ScenarioError(
+                f"Predicate '{name}' has inconsistent arity: expected {previous}, got {len(args)} in {where}."
+            )
+
+    def check_literal(
+        literal: str,
+        allowed_variables: set[str],
+        where: str,
+        *,
+        allow_partial: bool = False,
+    ) -> None:
+        try:
+            name, args = parse_predicate(literal)
+        except (TypeError, ValueError) as error:
+            raise ScenarioError(f"Invalid predicate '{literal}' in {where}: {error}") from error
+        previous = arities.setdefault(name, len(args))
+        if previous != len(args) and not (allow_partial and len(args) <= previous):
+            raise ScenarioError(
+                f"Predicate '{name}' has inconsistent arity: expected {previous}, got {len(args)} in {where}."
+            )
+        unknown = [arg for arg in args if arg not in constants and arg not in allowed_variables]
+        if unknown:
+            raise ScenarioError(
+                f"Predicate '{literal}' in {where} uses unknown constant/parameter(s): {', '.join(unknown)}."
+            )
+
+    for index, literal in enumerate((*scenario.initial_state, *scenario.goal_state)):
+        check_literal(literal, set(), f"state[{index}]")
+    for robot in scenario.robots:
+        names = [capability.name for capability in robot.capabilities]
+        if len(names) != len(set(names)):
+            raise ScenarioError(f"Robot '{robot.id}' capability names must be unique.")
+        for capability in robot.capabilities:
+            variables = set(capability.parameters)
+            if len(variables) != len(capability.parameters):
+                raise ScenarioError(f"Capability '{robot.id}.{capability.name}' parameters must be unique.")
+            if capability.parameter_types and len(capability.parameter_types) != len(capability.parameters):
+                raise ScenarioError(
+                    f"Capability '{robot.id}.{capability.name}' parameter_types must match parameters."
+                )
+            unknown_resources = set(capability.resources) - scenario.resource_ids
+            if unknown_resources:
+                raise ScenarioError(
+                    f"Capability '{robot.id}.{capability.name}' uses undeclared resources: "
+                    f"{', '.join(sorted(unknown_resources))}."
+                )
+            if capability.duration_ticks <= 0 or capability.timeout_ticks <= 0:
+                raise ScenarioError(f"Capability '{robot.id}.{capability.name}' durations/timeouts must be positive.")
+            if capability.duration_ticks > capability.timeout_ticks:
+                raise ScenarioError(
+                    f"Capability '{robot.id}.{capability.name}' duration_ticks exceeds timeout_ticks."
+                )
+            for literal in capability.preconditions:
+                check_literal(literal, variables, f"{robot.id}.{capability.name}.preconditions")
+            for literal in capability.effects.add:
+                check_literal(literal, variables, f"{robot.id}.{capability.name}.effects")
+            for literal in capability.effects.delete:
+                check_literal(
+                    literal,
+                    variables,
+                    f"{robot.id}.{capability.name}.effects.delete",
+                    allow_partial=True,
+                )
 
 
 def _parse_robot(data: dict[str, Any]) -> Robot:
@@ -207,45 +416,30 @@ def _parse_robot(data: dict[str, Any]) -> Robot:
 def _parse_capability(data: dict[str, Any], robot_id: str) -> Capability:
     if "name" not in data:
         raise ScenarioError(f"Robot '{robot_id}' has a capability without a 'name'.")
+    effects = normalize_effects(data.get("effects", {}), robot_id, data["name"])
     return Capability(
         name=str(data["name"]),
         parameters=tuple(data.get("parameters", [])),
-        preconditions=tuple(data.get("preconditions", [])),
-        effects=normalize_effects(data.get("effects", {}), robot_id, data["name"]),
+        preconditions=tuple(canonical_predicate(item) for item in data.get("preconditions", [])),
+        effects=Effects(
+            add=tuple(canonical_predicate(item) for item in effects.add),
+            delete=tuple(canonical_predicate(item) for item in effects.delete),
+        ),
+        parameter_types=tuple(data.get("parameter_types", [])),
+        resources=tuple(data.get("resources", [])),
+        action_type=str(data.get("action_type", "task")),
+        duration_ticks=int(data.get("duration_ticks", 1)),
+        timeout_ticks=int(data.get("timeout_ticks", 20)),
     )
 
 
 def normalize_effects(raw: Any, robot_id: str, capability: str) -> Effects:
-    """Accept either the explicit ``{"add": [...], "delete": [...]}`` form or the
-    legacy flat list (with the ``not_`` negation convention) and return
-    :class:`Effects`.
-    """
+    """Parse the explicit ``{"add": [...], "delete": [...]}`` effect contract."""
     if isinstance(raw, dict):
         return Effects(add=tuple(raw.get("add", [])), delete=tuple(raw.get("delete", [])))
-    if isinstance(raw, list):
-        return _convert_legacy_effects(raw, robot_id, capability)
     raise ScenarioError(
-        f"Capability '{robot_id}.{capability}' effects must be a list or an add/delete object."
+        f"Capability '{robot_id}.{capability}' effects must be an add/delete object."
     )
-
-
-def _convert_legacy_effects(effects: list[str], robot_id: str, capability: str) -> Effects:
-    warnings.warn(
-        f"Capability '{robot_id}.{capability}' uses legacy list-style effects with the "
-        "'not_' negation convention. Convert it to the explicit {'add': [...], 'delete': [...]} "
-        "form; the implicit conversion will be removed in a future release.",
-        DeprecationWarning,
-        stacklevel=3,
-    )
-    adds: list[str] = []
-    deletes: list[str] = []
-    for effect in effects:
-        name, args = parse_predicate(effect)
-        if name.startswith("not_"):
-            deletes.append(format_predicate(name.removeprefix("not_"), args))
-        else:
-            adds.append(effect)
-    return Effects(add=tuple(adds), delete=tuple(deletes))
 
 
 def _require(data: dict[str, Any], keys: list[str]) -> None:

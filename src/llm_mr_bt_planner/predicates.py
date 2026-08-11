@@ -33,8 +33,14 @@ def parse_predicate(predicate: str | None) -> tuple[str, list[str]]:
 
 
 def format_predicate(name: str, parameters: Iterable[str]) -> str:
-    """Inverse of :func:`parse_predicate`."""
+    """Inverse of :func:`parse_predicate`, using one canonical spelling."""
     return f"{name}({', '.join(parameters)})"
+
+
+def canonical_predicate(predicate: str) -> str:
+    """Normalize harmless whitespace so exact symbolic-state comparisons work."""
+    name, args = parse_predicate(predicate)
+    return format_predicate(name, args)
 
 
 def substitute(template: str, bindings: dict[str, str]) -> str:

@@ -37,9 +37,8 @@ def _toy_scenario():
 def _plan(b_tree):
     return parse_plan(
         {
-            "task_graph": [],
-            "assignments": [],
-            "synchronization": [],
+            "schema_version": "1.0",
+            "mission_id": "toy",
             "behavior_trees": {
                 # B first so it must wait a tick for A to produce p().
                 "B": b_tree,
@@ -59,7 +58,7 @@ def test_toy_plan_simulates_to_success(toy_scenario, toy_plan):
 def test_cross_robot_sync_succeeds():
     plan = _plan(
         {"type": "Sequence", "children": [
-            {"type": "Condition", "name": "p", "parameters": []},
+            {"type": "WaitFor", "name": "p", "parameters": [], "timeout_ticks": 20},
             {"type": "Action", "name": "use", "parameters": []},
         ]}
     )
@@ -70,7 +69,7 @@ def test_cross_robot_sync_succeeds():
 def test_deadlock_detected():
     plan = _plan(
         {"type": "Sequence", "children": [
-            {"type": "Condition", "name": "q", "parameters": []},  # never produced
+            {"type": "WaitFor", "name": "q", "parameters": [], "timeout_ticks": 20},  # never produced
             {"type": "Action", "name": "use", "parameters": []},
         ]}
     )
@@ -82,7 +81,7 @@ def test_deadlock_detected():
 def test_timeout_detected():
     plan = _plan(
         {"type": "Sequence", "children": [
-            {"type": "Condition", "name": "p", "parameters": []},
+            {"type": "WaitFor", "name": "p", "parameters": [], "timeout_ticks": 20},
             {"type": "Action", "name": "use", "parameters": []},
         ]}
     )
@@ -125,9 +124,8 @@ def test_parallel_latches_completed_children():
     # and the run dead-ends instead of succeeding.
     plan = parse_plan(
         {
-            "task_graph": [],
-            "assignments": [],
-            "synchronization": [],
+            "schema_version": "1.0",
+            "mission_id": "par",
             "behavior_trees": {
                 "A": {"type": "Parallel", "children": [
                     {"type": "Action", "name": "m1", "parameters": []},

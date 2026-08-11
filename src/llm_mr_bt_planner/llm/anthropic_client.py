@@ -3,7 +3,7 @@
 Endpoint, headers, and request/response shape follow the Messages API:
 ``POST https://api.anthropic.com/v1/messages`` with ``x-api-key`` +
 ``anthropic-version: 2023-06-01``; the response carries a ``content`` array of
-blocks. The default model is ``claude-opus-4-8``; JSON is requested via the
+blocks. The default model is ``claude-opus-5``; JSON is requested via the
 prompt (the plan schema is mildly recursive, so structured-output schemas do not
 apply cleanly here).
 
@@ -18,8 +18,9 @@ import urllib.error
 import urllib.request
 
 from .base import LLMError, redact_secrets
+from .catalog import default_model
 
-DEFAULT_MODEL = "claude-opus-4-8"
+DEFAULT_MODEL = default_model("anthropic")
 API_VERSION = "2023-06-01"
 
 
@@ -35,7 +36,8 @@ class AnthropicClient:
         self.name = "anthropic"
         self.model = model or os.environ.get("ANTHROPIC_MODEL", DEFAULT_MODEL)
         self._api_key = api_key or os.environ.get("ANTHROPIC_API_KEY")
-        self._base_url = (base_url or os.environ.get("ANTHROPIC_BASE_URL", "https://api.anthropic.com")).rstrip("/")
+        resolved_base_url = base_url or os.environ.get("ANTHROPIC_BASE_URL") or "https://api.anthropic.com"
+        self._base_url = resolved_base_url.rstrip("/")
         self._timeout = timeout if timeout is not None else float(os.environ.get("ANTHROPIC_TIMEOUT_SECONDS", "120"))
         self._max_tokens = max_tokens or int(os.environ.get("ANTHROPIC_MAX_TOKENS", "16000"))
         self.temperature = None

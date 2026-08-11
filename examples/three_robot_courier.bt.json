@@ -1,0 +1,191 @@
+{
+  "schema_version": "2.0",
+  "mission_id": "three_robot_courier",
+  "behavior_trees": {
+    "franka_a": {
+      "id": "franka_a.root",
+      "type": "Sequence",
+      "source": "llm",
+      "children": [
+        {
+          "id": "franka_a.acquire.source_zone",
+          "type": "AcquireResource",
+          "name": "source_zone",
+          "parameters": [],
+          "timeout_ticks": 40,
+          "source": "llm"
+        },
+        {
+          "id": "franka_a.action.pick_source",
+          "type": "Action",
+          "task_id": "a_pick_source",
+          "name": "pick_source",
+          "parameters": ["payload"],
+          "source": "llm"
+        },
+        {
+          "id": "franka_a.action.place_source_cradle",
+          "type": "Action",
+          "task_id": "a_place_source_cradle",
+          "name": "place_source_cradle",
+          "parameters": ["payload"],
+          "source": "llm"
+        },
+        {
+          "id": "franka_a.release.source_zone",
+          "type": "ReleaseResource",
+          "name": "source_zone",
+          "parameters": [],
+          "source": "llm"
+        }
+      ]
+    },
+    "unitree_go2_z1": {
+      "id": "unitree_go2_z1.root",
+      "type": "Sequence",
+      "source": "llm",
+      "children": [
+        {
+          "id": "unitree_go2_z1.wait.source_cradle",
+          "type": "WaitFor",
+          "name": "at",
+          "parameters": ["payload", "source_cradle"],
+          "timeout_ticks": 80,
+          "source": "llm"
+        },
+        {
+          "id": "unitree_go2_z1.acquire.source_zone",
+          "type": "AcquireResource",
+          "name": "source_zone",
+          "parameters": [],
+          "timeout_ticks": 40,
+          "source": "llm"
+        },
+        {
+          "id": "unitree_go2_z1.action.pick_source_cradle",
+          "type": "Action",
+          "task_id": "u_pick_source_cradle",
+          "name": "pick_source_cradle",
+          "parameters": ["payload"],
+          "source": "llm"
+        },
+        {
+          "id": "unitree_go2_z1.action.place_carrier",
+          "type": "Action",
+          "task_id": "u_place_carrier",
+          "name": "place_carrier",
+          "parameters": ["payload", "transport_carrier"],
+          "source": "llm"
+        },
+        {
+          "id": "unitree_go2_z1.action.stow_source",
+          "type": "Action",
+          "task_id": "u_stow_source",
+          "name": "stow_arm_source",
+          "parameters": ["transport_carrier", "payload"],
+          "source": "llm"
+        },
+        {
+          "id": "unitree_go2_z1.release.source_zone",
+          "type": "ReleaseResource",
+          "name": "source_zone",
+          "parameters": [],
+          "source": "llm"
+        },
+        {
+          "id": "unitree_go2_z1.action.navigate_destination",
+          "type": "Action",
+          "task_id": "u_navigate_destination",
+          "name": "navigate_destination",
+          "parameters": ["transport_carrier", "payload"],
+          "source": "llm"
+        },
+        {
+          "id": "unitree_go2_z1.acquire.destination_zone",
+          "type": "AcquireResource",
+          "name": "destination_zone",
+          "parameters": [],
+          "timeout_ticks": 40,
+          "source": "llm"
+        },
+        {
+          "id": "unitree_go2_z1.action.pick_carrier",
+          "type": "Action",
+          "task_id": "u_pick_carrier",
+          "name": "pick_carrier",
+          "parameters": ["payload", "transport_carrier"],
+          "source": "llm"
+        },
+        {
+          "id": "unitree_go2_z1.action.place_destination_cradle",
+          "type": "Action",
+          "task_id": "u_place_destination_cradle",
+          "name": "place_destination_cradle",
+          "parameters": ["payload"],
+          "source": "llm"
+        },
+        {
+          "id": "unitree_go2_z1.action.stow_destination",
+          "type": "Action",
+          "task_id": "u_stow_destination",
+          "name": "stow_arm_destination",
+          "parameters": ["payload"],
+          "source": "llm"
+        },
+        {
+          "id": "unitree_go2_z1.release.destination_zone",
+          "type": "ReleaseResource",
+          "name": "destination_zone",
+          "parameters": [],
+          "source": "llm"
+        }
+      ]
+    },
+    "franka_b": {
+      "id": "franka_b.root",
+      "type": "Sequence",
+      "source": "llm",
+      "children": [
+        {
+          "id": "franka_b.wait.destination_cradle",
+          "type": "WaitFor",
+          "name": "at",
+          "parameters": ["payload", "destination_cradle"],
+          "timeout_ticks": 80,
+          "source": "llm"
+        },
+        {
+          "id": "franka_b.acquire.destination_zone",
+          "type": "AcquireResource",
+          "name": "destination_zone",
+          "parameters": [],
+          "timeout_ticks": 40,
+          "source": "llm"
+        },
+        {
+          "id": "franka_b.action.pick_destination_cradle",
+          "type": "Action",
+          "task_id": "b_pick_destination_cradle",
+          "name": "pick_destination_cradle",
+          "parameters": ["payload"],
+          "source": "llm"
+        },
+        {
+          "id": "franka_b.action.install_target",
+          "type": "Action",
+          "task_id": "b_install_target",
+          "name": "install_target",
+          "parameters": ["payload", "target_fixture"],
+          "source": "llm"
+        },
+        {
+          "id": "franka_b.release.destination_zone",
+          "type": "ReleaseResource",
+          "name": "destination_zone",
+          "parameters": [],
+          "source": "llm"
+        }
+      ]
+    }
+  }
+}

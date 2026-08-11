@@ -4,18 +4,18 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "llm-mr-bt-planner"
-version = "0.2.0"
-description = "LLM-guided generation of synchronized multi-robot Behavior Trees, with a declarative symbolic domain, validator, tick-based simulator, execution-time recovery, MuJoCo physics execution, and reproducible experiments."
+version = "0.4.0"
+description = "Generate, validate, and contract-simulate LLM-authored synchronized multi-robot Behavior Trees."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
 authors = [{ name = "LLM-as-MR-BT-Planner contributors" }]
 keywords = ["behavior-trees", "multi-robot", "task-planning", "llm", "robotics"]
-dependencies = []
+dependencies = ["jsonschema>=4.23,<5"]
 
 [project.optional-dependencies]
 dev = ["pytest>=8", "ruff>=0.4", "mypy>=1.8"]
-mujoco = ["mujoco>=3.10", "mink>=1.1", "qpsolvers[daqp]"]
+ui = ["gradio>=5,<7", "keyring>=25,<27"]
 
 [project.scripts]
 lmrbtp = "llm_mr_bt_planner.cli:main"
@@ -45,3 +45,4 @@ packages = ["llm_mr_bt_planner"]
 mypy_path = "src"
 ignore_missing_imports = true
 warn_unused_ignores = true
+no_site_packages = true

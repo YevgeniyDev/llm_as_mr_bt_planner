@@ -12,10 +12,12 @@ import re
 import time
 import urllib.error
 import urllib.request
+from typing import Any
 
 from .base import LLMError, redact_secrets
+from .catalog import default_model
 
-DEFAULT_MODEL = "gpt-4o"
+DEFAULT_MODEL = default_model("openai")
 
 # Bounded retry for transient errors (rate limits / 5xx). Stays dependency-free.
 RETRY_STATUSES = {429, 500, 502, 503, 504}
@@ -34,11 +36,17 @@ class OpenAIClient:
         seed: int | None = None,
     ) -> None:
         self.name = "openai"
-        self.model = model or os.environ.get("OPENAI_MODEL", DEFAULT_MODEL)
+        self.model: str = model or os.environ.get("OPENAI_MODEL") or DEFAULT_MODEL
         self._api_key = api_key or os.environ.get("OPENAI_API_KEY")
-        self._base_url = (base_url or os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1")).rstrip("/")
+        resolved_base_url = base_url or os.environ.get("OPENAI_BASE_URL") or "https://api.openai.com/v1"
+        self._base_url = resolved_base_url.rstrip("/")
         self._timeout = timeout if timeout is not None else float(os.environ.get("OPENAI_TIMEOUT_SECONDS", "60"))
-        self._temperature = temperature if temperature is not None else float(os.environ.get("OPENAI_TEMPERATURE", "0"))
+        requested_temperature = (
+            temperature if temperature is not None else float(os.environ.get("OPENAI_TEMPERATURE", "0"))
+        )
+        self._temperature = (
+            None if _requires_default_temperature(self.model) else requested_temperature
+        )
         self.temperature = self._temperature
         self.seed = seed
 
@@ -50,15 +58,16 @@ class OpenAIClient:
         if not self._api_key:
             raise LLMError("OPENAI_API_KEY is not set. Copy .env.example to .env and add a key.")
 
-        payload = {
+        payload: dict[str, Any] = {
             "model": self.model,
             "messages": [
                 {"role": "system", "content": system},
                 {"role": "user", "content": user},
             ],
-            "temperature": self._temperature,
             "response_format": {"type": "json_object"},
         }
+        if self._temperature is not None:
+            payload["temperature"] = self._temperature
         if self.seed is not None:
             payload["seed"] = self.seed
         request = urllib.request.Request(
@@ -90,7 +99,10 @@ def _send(request: urllib.request.Request, timeout: float) -> str:
             if error.code in RETRY_STATUSES and attempt < MAX_RETRIES:
                 time.sleep(_retry_after(error, detail, attempt))
                 continue
-            raise LLMError(f"LLM request failed: HTTP {error.code}: {redact_secrets(detail)}") from error
+            raise LLMError(
+                f"OpenAI API request failed (HTTP {error.code}): "
+                f"{redact_secrets(_api_error_detail(detail))}"
+            ) from error
         except urllib.error.URLError as error:
             raise LLMError(f"LLM request failed: {redact_secrets(str(error.reason))}") from error
     raise LLMError("LLM request failed: exhausted retries")  # pragma: no cover
@@ -109,3 +121,26 @@ def _retry_after(error: urllib.error.HTTPError, detail: str, attempt: int) -> fl
     if match:
         return min(float(match.group(1)) + 0.5, 30.0)
     return min(2.0 ** attempt, 30.0)
+
+
+def _requires_default_temperature(model: str) -> bool:
+    """GPT-5-family models reject custom temperature at default reasoning settings."""
+    return model.lower().startswith("gpt-5")
+
+
+def _api_error_detail(detail: str) -> str:
+    """Extract a readable provider message instead of exposing raw JSON in the UI."""
+    try:
+        document = json.loads(detail)
+    except (json.JSONDecodeError, TypeError):
+        return detail
+    error = document.get("error") if isinstance(document, dict) else None
+    if not isinstance(error, dict):
+        return detail
+    message = error.get("message")
+    parameter = error.get("param")
+    if not isinstance(message, str) or not message.strip():
+        return detail
+    if isinstance(parameter, str) and parameter and parameter not in message:
+        return f"{message.strip()} (parameter: {parameter})"
+    return message.strip()

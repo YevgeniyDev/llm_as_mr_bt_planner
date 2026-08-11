@@ -16,19 +16,14 @@ env/
 .mypy_cache/
 .ruff_cache/
 
-# Generated experiment outputs
+# Generated application outputs
 outputs/
+projects/
 
 # Packaging
 build/
 dist/
 *.egg-info/
-
-# External baseline code (cloned, not vendored)
-third_party/
-
-# MuJoCo runtime logs (written next to wherever it runs)
-MUJOCO_LOG.TXT
 
 # Office temp/lock files
 ~$*

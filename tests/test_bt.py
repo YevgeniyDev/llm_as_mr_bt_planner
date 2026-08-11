@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from llm_mr_bt_planner.bt import BTParseError, iter_leaves, iter_nodes, parse_node
-from llm_mr_bt_planner.execution import export_behaviortree_cpp_xml
+from llm_mr_bt_planner.xml_export import export_behaviortree_cpp_xml
 
 
 def test_parse_nested_tree_and_iter_leaves():
@@ -45,5 +45,5 @@ def test_export_behaviortree_cpp_xml(toy_plan):
     xml = export_behaviortree_cpp_xml(toy_plan)
     assert '<BehaviorTree ID="A">' in xml
     assert '<Action name="make"' in xml
-    assert '<Condition name="p"' in xml
+    assert '<WaitFor name="p"' in xml
     assert xml.count("<BehaviorTree") == 2

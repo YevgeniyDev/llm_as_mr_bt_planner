@@ -1,10 +1,4 @@
-"""Shared test fixtures.
-
-The suite is engine-only: it exercises the deterministic parser/validator/
-simulator/visualizer with no LLM and no saved "answer" plans. Positive tests use
-a tiny inline two-robot domain (`toy_scenario` + `toy_plan`) that is known to be
-valid and to simulate to success.
-"""
+"""Shared deterministic fixtures for the standalone planner test suite."""
 
 from __future__ import annotations
 
@@ -15,22 +9,13 @@ import pytest
 from llm_mr_bt_planner.domain import Scenario, load_scenario, parse_scenario
 from llm_mr_bt_planner.plan import Plan, parse_plan
 
-DATA = Path(__file__).resolve().parents[1] / "data"
-
-SCENARIOS = {
-    "gear_assembly": DATA / "scenario.json",
-    "sensor_calibration_cell": DATA / "scenario2.json",
-}
+ROOT = Path(__file__).resolve().parents[1]
+COURIER_SCENARIO = ROOT / "examples" / "three_robot_courier.json"
 
 
 @pytest.fixture
-def gear_scenario() -> Scenario:
-    return load_scenario(SCENARIOS["gear_assembly"])
-
-
-@pytest.fixture
-def sensor_scenario() -> Scenario:
-    return load_scenario(SCENARIOS["sensor_calibration_cell"])
+def courier_scenario() -> Scenario:
+    return load_scenario(COURIER_SCENARIO, strict=True)
 
 
 def make_toy_scenario() -> Scenario:
@@ -59,18 +44,26 @@ def make_toy_plan() -> Plan:
     """A valid plan for `make_toy_scenario` that simulates to success."""
     return parse_plan(
         {
-            "task_graph": [
-                {"id": "t1", "action": "make", "parameters": [], "depends_on": []},
-                {"id": "t2", "action": "use", "parameters": [], "depends_on": ["t1"]},
-            ],
-            "assignments": [{"task_id": "t1", "robot": "A"}, {"task_id": "t2", "robot": "B"}],
-            "synchronization": [{"condition": "p()", "producer": "A", "consumer": "B"}],
+            "schema_version": "2.0",
+            "mission_id": "toy",
             "behavior_trees": {
-                "A": {"type": "Sequence", "children": [{"type": "Action", "name": "make", "parameters": []}]},
-                "B": {"type": "Sequence", "children": [
-                    {"type": "Condition", "name": "p", "parameters": []},
-                    {"type": "Action", "name": "use", "parameters": []},
-                ]},
+                "A": {
+                    "id": "A.root",
+                    "type": "Sequence",
+                    "source": "llm",
+                    "children": [
+                        {"id": "A.make", "type": "Action", "task_id": "t1", "name": "make", "parameters": [], "source": "llm"}
+                    ],
+                },
+                "B": {
+                    "id": "B.root",
+                    "type": "Sequence",
+                    "source": "llm",
+                    "children": [
+                        {"id": "B.wait.p", "type": "WaitFor", "name": "p", "parameters": [], "timeout_ticks": 20, "source": "llm"},
+                        {"id": "B.use", "type": "Action", "task_id": "t2", "name": "use", "parameters": [], "source": "llm"},
+                    ],
+                },
             },
         }
     )
