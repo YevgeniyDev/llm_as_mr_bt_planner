@@ -55,7 +55,7 @@ The **Cancel** button marks the run as cancelled. An HTTP request already being 
 The repository provides:
 
 - [Runnable example](examples/three_robot_courier.json)
-- [Committed reference BT](examples/three_robot_courier.bt.json) used only by offline validation, simulation, and regression checks
+- [Committed reference BT](examples/three_robot_courier.bt.json) used only by "doctor" command for separate validation, simulation, and regression checks of generated BTs
 - [Blank template](templates/three_robot_scenario.template.json)
 - [JSON Schema](schemas/scenario.schema.json)
 
