@@ -87,6 +87,25 @@ def _build_parser() -> argparse.ArgumentParser:
     ui.add_argument("--port", type=int, default=7860)
     ui.add_argument("--no-browser", action="store_true", help="Do not open the local UI in a browser.")
     ui.set_defaults(func=_cmd_ui)
+
+    physical = sub.add_parser(
+        "mujoco",
+        help="Execute the first courier BT against physical controllers in a separate MuJoCo process.",
+    )
+    physical.add_argument("--scenario", default=str(DEFAULT_SCENARIO))
+    physical.add_argument("--bt", default=str(PROJECT_ROOT / "examples" / "three_robot_courier.bt.json"))
+    physical.add_argument("--assets-dir", default=None, help="Existing or target MuJoCo Menagerie cache.")
+    physical.add_argument("--output", default=str(PROJECT_ROOT / "outputs" / "mujoco"))
+    physical.add_argument("--headless", action="store_true", help="Run without opening the MuJoCo viewer.")
+    physical.add_argument("--setup-only", action="store_true", help="Download and verify pinned robot assets, then exit.")
+    physical.add_argument("--max-seconds", type=float, default=150.0)
+    physical.add_argument(
+        "--realtime-factor",
+        type=float,
+        default=1.0,
+        help="Viewer playback speed; ignored in headless mode.",
+    )
+    physical.set_defaults(func=_cmd_mujoco)
     return parser
 
 
@@ -201,6 +220,20 @@ def _cmd_ui(args: argparse.Namespace) -> int:
 
     launch_ui(server_name=args.host, server_port=args.port, inbrowser=not args.no_browser)
     return 0
+
+
+def _cmd_mujoco(args: argparse.Namespace) -> int:
+    """Lazy import keeps MuJoCo entirely outside generation and the web UI."""
+    try:
+        from .mujoco_sim.runner import run_cli
+    except ImportError as error:
+        if error.name in {"mujoco", "numpy"}:
+            raise RuntimeError(
+                "MuJoCo simulation dependencies are missing. Install them with "
+                "python -m pip install -e \".[mujoco]\"."
+            ) from error
+        raise
+    return run_cli(args)
 
 
 def _provider_key(provider: str, use_saved: bool) -> str:

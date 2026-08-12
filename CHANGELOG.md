@@ -2,6 +2,33 @@
 
 All notable changes to the project are recorded here.
 
+## 0.5.0 - 2026-08-12
+
+### Added
+
+- Added an optional MuJoCo subsystem, isolated from LLM generation, for executing the first three-robot courier scenario with two Panda arms and a Go2 carrying a mounted Z1 gripper model.
+- Added `lmrbtp mujoco`, an interactive viewer command, plus `--headless`, `--setup-only`, explicit scenario/BT paths, execution limits, and JSON report output.
+- Added pinned, sparse MuJoCo Menagerie asset setup with revision verification, per-model license retention, cache provenance, and actionable setup failures.
+- Added a single composed dynamic scene with independent robot namespaces, a free payload, natural four-legged worktables, separate source/destination pads, target fixture, and physical floor contacts.
+- Added actuator-driven differential-IK controllers for both Pandas and Z1, a 12-motor Go2 contact gait, measured docking/stow/stationary predicates, and base fall/finite-state checks.
+- Added physical BT execution for the first scenario's sequences, waits, exclusive resources, and all eight direct-handoff capability actions. The executor waits on measured preconditions and never applies symbolic effects.
+- Added contact/proximity-qualified grasp constraints captured at the current relative pose, continuous Z1-held transport, fixture installation, physical timeouts, live CLI action logs, and `physical_execution_report.json`.
+- Added scene-composition tests and an opt-in headless end-to-end test requiring all six physical goals, eight successful actions, Z1-held transport, upright contact-driven locomotion, and zero direct Go2 base-state writes.
+- Added third-party controller/model provenance and an explicit account of simulation approximations and sim-to-real limitations.
+
+### Changed
+
+- Rebuilt both courier stations as separated laboratory workcells with physical metal Panda mounting plates and tabletop-height robot bases. In the default view, Franka A occupies the upper outer midpoint and Franka B the lower outer midpoint; both transfer from a left external zone to a right Go2 handoff or process zone while crossing their base-joint centerlines.
+- Increased the nominal Go2 dock-to-dock route from `1.20 m` to `3.00 m`, aligned both green handoff pads with the right-side travel route, widened the clear aisle, and updated the default overview/free camera for the longer scene.
+- Added continuous top-down pose IK for the bench-mounted Pandas and retained strict measured contact checks for every grasp and release.
+- Hid the nonphysical station target sites in the finished MuJoCo view while retaining their exact coordinates for controllers and measured predicates.
+- Moved the nominal Go2 docking reference to `0.54 m` from the table and preserved fully dynamic lateral motion during execution.
+- Corrected the Menagerie Z1 gripper direction and now require measured open/closed joint positions plus opposing finger-pad contacts before grasp acceptance.
+- Added Z1 pose-aware IK, rate-limited jaw closure, compliant finger-pad contacts, a stable manipulation stance, and staged destination release while keeping the Go2 base fully dynamic.
+- Franka actions now retreat and return home before releasing their exchange-zone resource, preventing overlap with the incoming Z1 arm.
+- Updated the first scenario from tray transport to direct Z1-held transport and separated the green destination pad from the red installation fixture.
+- Updated user documentation to distinguish contract simulation from physical MuJoCo execution and provide one-command viewer and headless workflows.
+
 ## 0.4.0 — 2026-08-11
 
 ### Changed

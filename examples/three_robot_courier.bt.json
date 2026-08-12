@@ -70,22 +70,6 @@
           "source": "llm"
         },
         {
-          "id": "unitree_go2_z1.action.place_carrier",
-          "type": "Action",
-          "task_id": "u_place_carrier",
-          "name": "place_carrier",
-          "parameters": ["payload", "transport_carrier"],
-          "source": "llm"
-        },
-        {
-          "id": "unitree_go2_z1.action.stow_source",
-          "type": "Action",
-          "task_id": "u_stow_source",
-          "name": "stow_arm_source",
-          "parameters": ["transport_carrier", "payload"],
-          "source": "llm"
-        },
-        {
           "id": "unitree_go2_z1.release.source_zone",
           "type": "ReleaseResource",
           "name": "source_zone",
@@ -97,7 +81,7 @@
           "type": "Action",
           "task_id": "u_navigate_destination",
           "name": "navigate_destination",
-          "parameters": ["transport_carrier", "payload"],
+          "parameters": ["payload"],
           "source": "llm"
         },
         {
@@ -106,14 +90,6 @@
           "name": "destination_zone",
           "parameters": [],
           "timeout_ticks": 40,
-          "source": "llm"
-        },
-        {
-          "id": "unitree_go2_z1.action.pick_carrier",
-          "type": "Action",
-          "task_id": "u_pick_carrier",
-          "name": "pick_carrier",
-          "parameters": ["payload", "transport_carrier"],
           "source": "llm"
         },
         {

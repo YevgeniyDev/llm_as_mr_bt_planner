@@ -1,7 +1,7 @@
 {
   "schema_version": "1.0",
   "task_id": "three_robot_courier",
-  "instruction": "Move payload from source_bin to target_fixture. Franka A loads source_cradle, the Unitree Go2 with Z1 carries the payload in transport_carrier to destination_cradle, and Franka B installs it. Respect both exclusive exchange zones and every declared manipulation, docking, stationary-base, stowed-arm, and secured-carrier precondition.",
+  "instruction": "Move payload from source_bin to target_fixture. Franka A places it in the source handoff zone, the Unitree Go2 grasps it with the Z1 and keeps that grasp closed throughout locomotion before releasing it in the green destination zone, and Franka B installs it in the separate target fixture. Respect both exclusive exchange zones and every declared manipulation, docking, stationary-base, grasp, and stowed-arm precondition.",
   "initial_state": [
     "system_ready()",
     "robot_ready(franka_a)",
@@ -11,14 +11,12 @@
     "arm_stowed(unitree_go2_z1)",
     "docked(unitree_go2_z1,source_dock)",
     "at(payload,source_bin)",
-    "carrier_empty(transport_carrier)",
     "gripper_empty(franka_a)",
     "gripper_empty(unitree_go2_z1)",
     "gripper_empty(franka_b)"
   ],
   "goal_state": [
     "installed(payload,target_fixture)",
-    "carrier_empty(transport_carrier)",
     "gripper_empty(franka_a)",
     "gripper_empty(unitree_go2_z1)",
     "gripper_empty(franka_b)",
@@ -27,10 +25,8 @@
   ],
   "entities": [
     {"id": "payload", "type": "part"},
-    {"id": "transport_carrier", "type": "carrier"},
     {"id": "source_bin", "type": "location"},
     {"id": "source_cradle", "type": "location"},
-    {"id": "carrier_slot", "type": "location"},
     {"id": "destination_cradle", "type": "location"},
     {"id": "target_fixture", "type": "fixture"},
     {"id": "source_zone", "type": "zone"},
@@ -90,7 +86,7 @@
           "resources": ["source_zone"],
           "action_type": "manipulation",
           "duration_ticks": 3,
-          "timeout_ticks": 15,
+          "timeout_ticks": 25,
           "preconditions": ["system_ready()", "robot_ready(unitree_go2_z1)", "base_stationary(unitree_go2_z1)", "arm_stowed(unitree_go2_z1)", "docked(unitree_go2_z1,source_dock)", "at(part,source_cradle)", "gripper_empty(unitree_go2_z1)"],
           "effects": {
             "add": ["holding(unitree_go2_z1,part)"],
@@ -98,56 +94,17 @@
           }
         },
         {
-          "name": "place_carrier",
-          "parameters": ["part", "carrier"],
-          "parameter_types": ["part", "carrier"],
-          "resources": ["source_zone"],
-          "action_type": "manipulation",
-          "duration_ticks": 2,
-          "timeout_ticks": 12,
-          "preconditions": ["system_ready()", "robot_ready(unitree_go2_z1)", "base_stationary(unitree_go2_z1)", "holding(unitree_go2_z1,part)", "carrier_empty(carrier)"],
-          "effects": {
-            "add": ["at(part,carrier_slot)", "carrier_secured(carrier,part)", "gripper_empty(unitree_go2_z1)"],
-            "delete": ["holding(unitree_go2_z1,part)", "carrier_empty(carrier)"]
-          }
-        },
-        {
-          "name": "stow_arm_source",
-          "parameters": ["carrier", "part"],
-          "parameter_types": ["carrier", "part"],
-          "resources": ["source_zone"],
-          "action_type": "verification",
-          "duration_ticks": 2,
-          "timeout_ticks": 10,
-          "preconditions": ["robot_ready(unitree_go2_z1)", "base_stationary(unitree_go2_z1)", "carrier_secured(carrier,part)", "gripper_empty(unitree_go2_z1)"],
-          "effects": {"add": ["arm_stowed(unitree_go2_z1)"], "delete": []}
-        },
-        {
           "name": "navigate_destination",
-          "parameters": ["carrier", "part"],
-          "parameter_types": ["carrier", "part"],
+          "parameters": ["part"],
+          "parameter_types": ["part"],
           "resources": [],
           "action_type": "navigation",
           "duration_ticks": 4,
-          "timeout_ticks": 20,
-          "preconditions": ["system_ready()", "robot_ready(unitree_go2_z1)", "base_stationary(unitree_go2_z1)", "arm_stowed(unitree_go2_z1)", "carrier_secured(carrier,part)", "docked(unitree_go2_z1,source_dock)"],
+          "timeout_ticks": 30,
+          "preconditions": ["system_ready()", "robot_ready(unitree_go2_z1)", "base_stationary(unitree_go2_z1)", "holding(unitree_go2_z1,part)", "docked(unitree_go2_z1,source_dock)"],
           "effects": {
             "add": ["docked(unitree_go2_z1,destination_dock)"],
             "delete": ["docked(unitree_go2_z1,source_dock)"]
-          }
-        },
-        {
-          "name": "pick_carrier",
-          "parameters": ["part", "carrier"],
-          "parameter_types": ["part", "carrier"],
-          "resources": ["destination_zone"],
-          "action_type": "manipulation",
-          "duration_ticks": 2,
-          "timeout_ticks": 12,
-          "preconditions": ["system_ready()", "robot_ready(unitree_go2_z1)", "base_stationary(unitree_go2_z1)", "arm_stowed(unitree_go2_z1)", "docked(unitree_go2_z1,destination_dock)", "at(part,carrier_slot)", "carrier_secured(carrier,part)", "gripper_empty(unitree_go2_z1)"],
-          "effects": {
-            "add": ["holding(unitree_go2_z1,part)", "carrier_empty(carrier)"],
-            "delete": ["at(part,carrier_slot)", "carrier_secured(carrier,part)", "gripper_empty(unitree_go2_z1)", "arm_stowed(unitree_go2_z1)"]
           }
         },
         {
@@ -157,7 +114,7 @@
           "resources": ["destination_zone"],
           "action_type": "manipulation",
           "duration_ticks": 2,
-          "timeout_ticks": 12,
+          "timeout_ticks": 25,
           "preconditions": ["system_ready()", "robot_ready(unitree_go2_z1)", "base_stationary(unitree_go2_z1)", "holding(unitree_go2_z1,part)"],
           "effects": {
             "add": ["at(part,destination_cradle)", "gripper_empty(unitree_go2_z1)"],

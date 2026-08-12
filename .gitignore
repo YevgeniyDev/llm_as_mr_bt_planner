@@ -19,6 +19,7 @@ env/
 # Generated application outputs
 outputs/
 projects/
+MUJOCO_LOG.TXT
 
 # Packaging
 build/
