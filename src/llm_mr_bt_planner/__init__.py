@@ -1,13 +1,13 @@
 """Generate and verify synchronized multi-robot Behavior Trees.
 
 The package contains a standalone symbolic contract planner plus an optional
-MuJoCo executor for the first courier scenario. ROS 2, perception, and hardware
-execution remain outside this release.
+MuJoCo executor for the courier and collaborative packing/delivery scenarios. ROS 2,
+perception, and hardware execution remain outside this release.
 """
 
 from __future__ import annotations
 
-__version__ = "0.5.0"
+__version__ = "0.6.0"
 
 from .domain import Scenario, load_scenario, parse_scenario
 from .llm import AnthropicClient, OpenAIClient, get_client

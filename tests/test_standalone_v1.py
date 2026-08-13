@@ -27,12 +27,21 @@ from llm_mr_bt_planner.validation import validate_plan
 ROOT = Path(__file__).resolve().parents[1]
 SCENARIO_PATH = ROOT / "examples" / "three_robot_courier.json"
 BT_PATH = ROOT / "examples" / "three_robot_courier.bt.json"
+PACKAGING_SCENARIO_PATH = ROOT / "examples" / "three_robot_packaging_delivery.json"
+PACKAGING_BT_PATH = ROOT / "examples" / "three_robot_packaging_delivery.bt.json"
 
 
 @pytest.fixture
 def courier():
     scenario = load_scenario(SCENARIO_PATH, strict=True)
     plan_document = json.loads(BT_PATH.read_text(encoding="utf-8"))
+    return scenario, parse_plan(plan_document)
+
+
+@pytest.fixture
+def packaging():
+    scenario = load_scenario(PACKAGING_SCENARIO_PATH, strict=True)
+    plan_document = json.loads(PACKAGING_BT_PATH.read_text(encoding="utf-8"))
     return scenario, parse_plan(plan_document)
 
 
@@ -73,6 +82,55 @@ def test_reference_contract_validates_and_simulates_with_real_async_and_resource
     assert report.success and report.goal_success and report.errors == []
     events = {event["event"] for event in report.trace}
     assert {"action_running", "wait_satisfied", "resource_acquired", "resource_released"} <= events
+
+
+def test_packaging_reference_coordinates_assembly_door_crossing_and_delivery(packaging):
+    scenario, plan = packaging
+    validation = validate_plan(plan, scenario)
+    assert validation.valid, validation.to_dicts()
+
+    nodes = [node for tree in plan.behavior_trees.values() for node in iter_nodes(tree)]
+    assert sum(node.type == "Fallback" for node in nodes) == 1
+    assert sum(node.type == "WaitFor" for node in nodes) == 3
+    assert sum(node.type == "AcquireResource" for node in nodes) == 6
+    assert sum(node.type == "ReleaseResource" for node in nodes) == 6
+
+    report = simulate(plan, scenario, max_ticks=140)
+    assert report.success and report.goal_success and report.errors == []
+    actions = [event.get("name") for event in report.trace if event.get("event") == "action"]
+    assert "pick_loaded_package_base" in actions
+    assert "pick_package_lid" in actions
+    assert "fit_and_seal_package_lid" in actions
+    assert "push_open_door_and_cross" in actions
+    assert "cross_already_open_door" not in actions
+    assert "place_parcel_at_delivery_station" in actions
+    assert set(scenario.goal_state) <= set(report.final_state)
+
+
+def test_packaging_scenario_runs_the_direct_llm_generation_pipeline(tmp_path):
+    class _PackagingReferenceClient:
+        name = "test-reference-client"
+        model = "committed-packaging-proposal"
+
+        @staticmethod
+        def complete(system: str, user: str) -> str:  # noqa: ARG004
+            return PACKAGING_BT_PATH.read_text(encoding="utf-8")
+
+    service = PlannerService(tmp_path, client_factory=_factory(_PackagingReferenceClient()))
+    outcome = service.generate(
+        service.load_json(PACKAGING_SCENARIO_PATH),
+        provider="openai",
+        api_key="test-only",
+        max_corrections=0,
+        max_ticks=140,
+    )
+
+    assert outcome.scenario.task_id == "three_robot_packaging_delivery"
+    assert outcome.validation.valid
+    assert outcome.simulation.success
+    assert outcome.artifacts.behavior_tree_json is not None
+    generated = load_plan_file(outcome.artifacts.behavior_tree_json)
+    assert generated.to_dict() == json.loads(PACKAGING_BT_PATH.read_text(encoding="utf-8"))
 
 
 def test_cancellation_releases_owned_resources(courier):
@@ -370,6 +428,7 @@ def test_gradio_app_builds_without_ros_or_mujoco_imports():
     assert "Scenario JSON (advanced)" in labels
     assert "Model" in labels
     assert "Model override" not in labels
+    assert "Bundled scenario" in labels
 
     accordions = {
         component.get("props", {}).get("label"): component.get("props", {})

@@ -21,6 +21,7 @@ from .viz import plan_to_html
 from .xml_export import export_behaviortree_cpp_xml
 
 DEFAULT_SCENARIO = PROJECT_ROOT / "examples" / "three_robot_courier.json"
+PACKAGING_SCENARIO = PROJECT_ROOT / "examples" / "three_robot_packaging_delivery.json"
 DEFAULT_TEMPLATE = PROJECT_ROOT / "templates" / "three_robot_scenario.template.json"
 
 
@@ -90,10 +91,14 @@ def _build_parser() -> argparse.ArgumentParser:
 
     physical = sub.add_parser(
         "mujoco",
-        help="Execute the first courier BT against physical controllers in a separate MuJoCo process.",
+        help="Execute a supported BT against physical controllers in a separate MuJoCo process.",
     )
     physical.add_argument("--scenario", default=str(DEFAULT_SCENARIO))
-    physical.add_argument("--bt", default=str(PROJECT_ROOT / "examples" / "three_robot_courier.bt.json"))
+    physical.add_argument(
+        "--bt",
+        default=None,
+        help="BT JSON. If omitted, use the .bt.json beside the selected bundled scenario.",
+    )
     physical.add_argument("--assets-dir", default=None, help="Existing or target MuJoCo Menagerie cache.")
     physical.add_argument("--output", default=str(PROJECT_ROOT / "outputs" / "mujoco"))
     physical.add_argument("--headless", action="store_true", help="Run without opening the MuJoCo viewer.")
@@ -199,17 +204,32 @@ def _cmd_doctor(args: argparse.Namespace) -> int:  # noqa: ARG001
             checks.append((dependency, True, "installed"))
         except ImportError:
             checks.append((dependency, False, "missing; install pip install -e '.[ui]'"))
-    try:
-        scenario = load_scenario(DEFAULT_SCENARIO, strict=True)
-        plan = load_plan_file(PROJECT_ROOT / "examples" / "three_robot_courier.bt.json")
-        validation = validate_plan(plan, scenario)
-        simulation = simulate(plan, scenario, max_ticks=100) if validation.valid else None
-        checks.append(("reference validation", validation.valid, f"{len(validation.errors)} error(s)"))
-        checks.append(
-            ("reference simulation", bool(simulation and simulation.success), "goals reached" if simulation and simulation.success else "failed")
-        )
-    except Exception as error:
-        checks.append(("reference pipeline", False, str(error)))
+    references = (
+        ("courier", DEFAULT_SCENARIO, PROJECT_ROOT / "examples" / "three_robot_courier.bt.json"),
+        (
+            "packaging",
+            PACKAGING_SCENARIO,
+            PROJECT_ROOT / "examples" / "three_robot_packaging_delivery.bt.json",
+        ),
+    )
+    for label, scenario_path, bt_path in references:
+        try:
+            scenario = load_scenario(scenario_path, strict=True)
+            plan = load_plan_file(bt_path)
+            validation = validate_plan(plan, scenario)
+            simulation = simulate(plan, scenario, max_ticks=140) if validation.valid else None
+            checks.append(
+                (f"{label} reference validation", validation.valid, f"{len(validation.errors)} error(s)")
+            )
+            checks.append(
+                (
+                    f"{label} reference simulation",
+                    bool(simulation and simulation.success),
+                    "goals reached" if simulation and simulation.success else "failed",
+                )
+            )
+        except Exception as error:
+            checks.append((f"{label} reference pipeline", False, str(error)))
     for name, passed, detail in checks:
         print(f"{'PASS' if passed else 'FAIL':4}  {name}: {detail}")
     return 0 if all(passed for _, passed, _ in checks) else 1

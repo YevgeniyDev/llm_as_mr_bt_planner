@@ -15,7 +15,13 @@ from .projects import ProjectStore
 from .secrets import SecretStore
 from .service import PlannerService
 
-EXAMPLE_SCENARIO = PROJECT_ROOT / "examples" / "three_robot_courier.json"
+COURIER_SCENARIO = PROJECT_ROOT / "examples" / "three_robot_courier.json"
+PACKAGING_SCENARIO = PROJECT_ROOT / "examples" / "three_robot_packaging_delivery.json"
+EXAMPLE_SCENARIO = PACKAGING_SCENARIO
+BUNDLED_SCENARIOS = {
+    "Collaborative packing and room delivery": PACKAGING_SCENARIO,
+    "Three-robot courier": COURIER_SCENARIO,
+}
 SCENARIO_TEMPLATE = PROJECT_ROOT / "templates" / "three_robot_scenario.template.json"
 APP_CSS = """
 .gradio-container {
@@ -64,6 +70,21 @@ def build_app(
             return json.dumps(document, indent=2), scenario.instruction, f"Loaded and validated `{scenario.task_id}`."
         except Exception as error:
             stop_with_error("Scenario upload failed", error)
+
+    def load_bundled_scenario(name: str | None) -> tuple[str, str, str]:
+        try:
+            path = BUNDLED_SCENARIOS.get(_clean_text(name))
+            if path is None:
+                raise ValueError("Choose one of the bundled scenarios.")
+            document = service.load_json(path)
+            scenario = service.parse_scenario_document(document)
+            return (
+                json.dumps(document, indent=2),
+                scenario.instruction,
+                f"Loaded bundled scenario `{scenario.task_id}`.",
+            )
+        except Exception as error:
+            stop_with_error("Bundled scenario was not loaded", error)
 
     def validate_scenario(text: str | None, instruction_text: str | None) -> str:
         try:
@@ -407,11 +428,19 @@ def build_app(
                 scale=3,
             )
             with gr.Column(scale=2, min_width=240):
+                bundled_scenario = gr.Dropdown(
+                    choices=list(BUNDLED_SCENARIOS),
+                    value="Collaborative packing and room delivery",
+                    label="Bundled scenario",
+                    info="Select one to load it directly; no upload is required.",
+                )
                 validate_button = gr.Button("Validate scenario", variant="secondary")
                 with gr.Row():
                     gr.DownloadButton("Blank template", value=str(SCENARIO_TEMPLATE), size="sm")
-                    gr.DownloadButton("Runnable example", value=str(EXAMPLE_SCENARIO), size="sm")
-        scenario_status = gr.Markdown("Bundled three-robot courier example is ready.")
+                    gr.DownloadButton("Scenario JSON", value=str(EXAMPLE_SCENARIO), size="sm")
+        scenario_status = gr.Markdown(
+            "Bundled collaborative packing and closed-door delivery scenario is ready."
+        )
         with gr.Accordion("Advanced: edit scenario JSON", open=False):
             scenario_editor = gr.Code(
                 value=initial_json,
@@ -505,6 +534,13 @@ def build_app(
             upload_scenario,
             inputs=scenario_file,
             outputs=[scenario_editor, instruction, scenario_status],
+        )
+        bundled_scenario.input(
+            load_bundled_scenario,
+            inputs=bundled_scenario,
+            outputs=[scenario_editor, instruction, scenario_status],
+            queue=False,
+            show_progress="hidden",
         )
         validate_button.click(validate_scenario, inputs=[scenario_editor, instruction], outputs=scenario_status)
         save_project_button.click(

@@ -2,6 +2,30 @@
 
 All notable changes to the project are recorded here.
 
+## 0.6.0 - 2026-08-13
+
+### Added
+
+- Replaced the old inspection/adaptive mission with `three_robot_packaging_delivery`, a complete generation scenario in which two Panda arms collaboratively assemble a sealed parcel and Go2/Z1 delivers it into another room through an initially closed door.
+- Added a complete schema-v2 reference BT with three cross-robot waits, four exclusive resources, concurrent three-robot execution, and a physically selected closed-door/already-open `Fallback`.
+- Added the packing scenario to the UI as the default bundled choice while retaining the courier as a one-click alternative. The LLM generation service receives the selected scenario normally; no reference BT is injected into generation.
+- Added an independent package base and lid, shared assembly bench, opposed Panda work positions, a separate delivery room, collidable wall and hinged door, and a room-side delivery pedestal to MuJoCo.
+- Added physical controller mappings for all twelve packing and delivery capabilities, including separate base/lid retrieval, measured sealing, sealed-parcel grasping, door approach, contact-driven door opening, far-side crossing, room navigation, placement, and stow.
+- Added packaging evidence to physical reports: initial door state, measured final hinge angle, seal-constraint state, parcel and lid positions, final delivery state, and resource-release status.
+- Added strict symbolic, direct-generation, scene-composition, canonical-predicate, and opt-in packaging MuJoCo end-to-end regression tests. `lmrbtp doctor` now validates and simulates both bundled reference missions.
+
+### Changed
+
+- Replaced the physical executor's flattened leaf cursor with hierarchical `Sequence` and `Fallback` tick semantics. Only the selected branch executes; the adapter rejects unsupported physical composites instead of flattening or rewriting them.
+- Physical Action failure now propagates through the BT and can be recovered by a `Fallback`. Recovered failures remain in the live log and `physical_execution_report.json` rather than being hidden.
+- Physical blackboard predicates are now canonicalized before storage and lookup, so equivalent LLM predicate spellings behave identically in MuJoCo execution.
+- Reworked the second physical scene around truthful collaborative packing: both manipulators move independent dynamic parts, the lid seal is enabled only at the reached assembly pose, Go2 can pick only a measured sealed parcel, and locomotion fails if either the Z1 grasp or seal is lost.
+- Corrected the door frame and panel geometry so the hinge is not pinned by overlapping collision bodies. The closed-door action now succeeds only after contact opens the measured hinge beyond `0.70 rad` and the dynamic Go2 base reaches the far side.
+- Aligned the post-door room route with the lateral deflection created naturally by Go2-panel contact, preserving the contact-driven opening instead of resetting or teleporting the base.
+- `lmrbtp mujoco --scenario PATH` now discovers an adjacent `PATH.bt.json` when `--bt` is omitted, while still requiring an explicit BT for generated/custom files without a matching adjacent reference.
+- Stabilized Z1 release verification by allowing the dynamic component to finish settling while the gripper retreats instead of rejecting a transient bounce immediately.
+- Updated the README to document both generation scenarios, both MuJoCo commands, the symbolic/physical branch boundary, and the exact claims supported by the packaging report.
+
 ## 0.5.0 - 2026-08-12
 
 ### Added

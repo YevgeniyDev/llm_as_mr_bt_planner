@@ -1,0 +1,321 @@
+{
+  "schema_version": "1.0",
+  "task_id": "three_robot_packaging_delivery",
+  "instruction": "Collaboratively assemble a sealed parcel and deliver it into another room. Franka A must position the loaded package base at the shared packing station while Franka B retrieves a separate lid. Franka B must wait for the base, physically fit and seal the lid, and return home. The Unitree Go2 with Z1 must verify delivery readiness, wait for the measured package seal, pick the assembled parcel, retain it throughout transport, approach the initially closed room door, and use the closed-door branch to push the hinged door open and cross the doorway. It must then continue into the delivery room, place the sealed parcel at the delivery station, and stow its arm. Every shared area must be explicitly acquired and released; no robot may wait while holding a shared resource; all waits and acquisitions must be bounded; and all robots must finish empty and home or stowed.",
+  "initial_state": [
+    "system_ready()",
+    "robot_ready(franka_a)",
+    "robot_ready(franka_b)",
+    "robot_ready(unitree_go2_z1)",
+    "arm_home(franka_a)",
+    "arm_home(franka_b)",
+    "arm_stowed(unitree_go2_z1)",
+    "base_stationary(unitree_go2_z1)",
+    "gripper_empty(franka_a)",
+    "gripper_empty(franka_b)",
+    "gripper_empty(unitree_go2_z1)",
+    "at(package_base,base_supply)",
+    "at(package_lid,lid_supply)",
+    "docked(unitree_go2_z1,source_dock)",
+    "door_closed(room_door)"
+  ],
+  "goal_state": [
+    "package_sealed(package_base,package_lid)",
+    "attached(package_lid,package_base)",
+    "delivered(package_base,delivery_station)",
+    "door_open(room_door)",
+    "gripper_empty(franka_a)",
+    "gripper_empty(franka_b)",
+    "gripper_empty(unitree_go2_z1)",
+    "arm_home(franka_a)",
+    "arm_home(franka_b)",
+    "arm_stowed(unitree_go2_z1)",
+    "docked(unitree_go2_z1,destination_dock)"
+  ],
+  "entities": [
+    {"id": "package_base", "type": "part"},
+    {"id": "package_lid", "type": "part"},
+    {"id": "base_supply", "type": "location"},
+    {"id": "lid_supply", "type": "location"},
+    {"id": "packing_station", "type": "location"},
+    {"id": "delivery_station", "type": "location"},
+    {"id": "packing_zone", "type": "zone"},
+    {"id": "lid_supply_zone", "type": "zone"},
+    {"id": "doorway_zone", "type": "zone"},
+    {"id": "delivery_zone", "type": "zone"},
+    {"id": "source_dock", "type": "dock"},
+    {"id": "door_staging", "type": "dock"},
+    {"id": "beyond_door", "type": "dock"},
+    {"id": "destination_dock", "type": "dock"},
+    {"id": "room_door", "type": "fixture"}
+  ],
+  "resources": [
+    {"id": "packing_zone", "capacity": 1},
+    {"id": "lid_supply_zone", "capacity": 1},
+    {"id": "doorway_zone", "capacity": 1},
+    {"id": "delivery_zone", "capacity": 1}
+  ],
+  "robots": [
+    {
+      "id": "franka_a",
+      "name": "Franka Emika Panda A",
+      "type": "fixed_manipulator",
+      "capabilities": [
+        {
+          "name": "pick_loaded_package_base",
+          "parameters": ["base"],
+          "parameter_types": ["part"],
+          "resources": ["packing_zone"],
+          "action_type": "manipulation",
+          "duration_ticks": 2,
+          "timeout_ticks": 12,
+          "preconditions": [
+            "system_ready()",
+            "robot_ready(franka_a)",
+            "arm_home(franka_a)",
+            "gripper_empty(franka_a)",
+            "at(base,base_supply)"
+          ],
+          "effects": {
+            "add": ["holding(franka_a,base)"],
+            "delete": ["at(base,base_supply)", "gripper_empty(franka_a)", "arm_home(franka_a)"]
+          }
+        },
+        {
+          "name": "place_base_at_packing_station",
+          "parameters": ["base"],
+          "parameter_types": ["part"],
+          "resources": ["packing_zone"],
+          "action_type": "manipulation",
+          "duration_ticks": 2,
+          "timeout_ticks": 12,
+          "preconditions": [
+            "system_ready()",
+            "robot_ready(franka_a)",
+            "holding(franka_a,base)"
+          ],
+          "effects": {
+            "add": ["at(base,packing_station)", "gripper_empty(franka_a)", "arm_home(franka_a)"],
+            "delete": ["holding(franka_a,base)"]
+          }
+        }
+      ]
+    },
+    {
+      "id": "franka_b",
+      "name": "Franka Emika Panda B",
+      "type": "fixed_manipulator",
+      "capabilities": [
+        {
+          "name": "pick_package_lid",
+          "parameters": ["lid"],
+          "parameter_types": ["part"],
+          "resources": ["lid_supply_zone"],
+          "action_type": "manipulation",
+          "duration_ticks": 2,
+          "timeout_ticks": 12,
+          "preconditions": [
+            "system_ready()",
+            "robot_ready(franka_b)",
+            "arm_home(franka_b)",
+            "gripper_empty(franka_b)",
+            "at(lid,lid_supply)"
+          ],
+          "effects": {
+            "add": ["holding(franka_b,lid)"],
+            "delete": ["at(lid,lid_supply)", "gripper_empty(franka_b)", "arm_home(franka_b)"]
+          }
+        },
+        {
+          "name": "fit_and_seal_package_lid",
+          "parameters": ["base", "lid"],
+          "parameter_types": ["part", "part"],
+          "resources": ["packing_zone"],
+          "action_type": "manipulation",
+          "duration_ticks": 3,
+          "timeout_ticks": 16,
+          "preconditions": [
+            "system_ready()",
+            "robot_ready(franka_b)",
+            "holding(franka_b,lid)",
+            "at(base,packing_station)"
+          ],
+          "effects": {
+            "add": [
+              "package_sealed(base,lid)",
+              "attached(lid,base)",
+              "gripper_empty(franka_b)",
+              "arm_home(franka_b)"
+            ],
+            "delete": ["holding(franka_b,lid)"]
+          }
+        }
+      ]
+    },
+    {
+      "id": "unitree_go2_z1",
+      "name": "Unitree Go2 with Z1 arm",
+      "type": "mobile_manipulator",
+      "capabilities": [
+        {
+          "name": "verify_delivery_readiness",
+          "parameters": [],
+          "parameter_types": [],
+          "resources": [],
+          "action_type": "verification",
+          "duration_ticks": 1,
+          "timeout_ticks": 8,
+          "preconditions": [
+            "system_ready()",
+            "robot_ready(unitree_go2_z1)",
+            "base_stationary(unitree_go2_z1)",
+            "arm_stowed(unitree_go2_z1)",
+            "gripper_empty(unitree_go2_z1)"
+          ],
+          "effects": {"add": ["delivery_ready(unitree_go2_z1)"], "delete": []}
+        },
+        {
+          "name": "pick_sealed_parcel",
+          "parameters": ["base", "lid"],
+          "parameter_types": ["part", "part"],
+          "resources": ["packing_zone"],
+          "action_type": "manipulation",
+          "duration_ticks": 3,
+          "timeout_ticks": 25,
+          "preconditions": [
+            "system_ready()",
+            "robot_ready(unitree_go2_z1)",
+            "delivery_ready(unitree_go2_z1)",
+            "base_stationary(unitree_go2_z1)",
+            "arm_stowed(unitree_go2_z1)",
+            "gripper_empty(unitree_go2_z1)",
+            "docked(unitree_go2_z1,source_dock)",
+            "at(base,packing_station)",
+            "package_sealed(base,lid)"
+          ],
+          "effects": {
+            "add": ["holding(unitree_go2_z1,base)"],
+            "delete": ["at(base,packing_station)", "gripper_empty(unitree_go2_z1)", "arm_stowed(unitree_go2_z1)"]
+          }
+        },
+        {
+          "name": "approach_closed_room_door",
+          "parameters": ["base", "door"],
+          "parameter_types": ["part", "fixture"],
+          "resources": [],
+          "action_type": "navigation",
+          "duration_ticks": 4,
+          "timeout_ticks": 30,
+          "preconditions": [
+            "system_ready()",
+            "robot_ready(unitree_go2_z1)",
+            "holding(unitree_go2_z1,base)",
+            "docked(unitree_go2_z1,source_dock)"
+          ],
+          "effects": {
+            "add": ["docked(unitree_go2_z1,door_staging)"],
+            "delete": ["docked(unitree_go2_z1,source_dock)"]
+          }
+        },
+        {
+          "name": "push_open_door_and_cross",
+          "parameters": ["base", "door"],
+          "parameter_types": ["part", "fixture"],
+          "resources": ["doorway_zone"],
+          "action_type": "navigation",
+          "duration_ticks": 5,
+          "timeout_ticks": 35,
+          "preconditions": [
+            "system_ready()",
+            "robot_ready(unitree_go2_z1)",
+            "holding(unitree_go2_z1,base)",
+            "docked(unitree_go2_z1,door_staging)",
+            "door_closed(door)"
+          ],
+          "effects": {
+            "add": ["door_open(door)", "docked(unitree_go2_z1,beyond_door)"],
+            "delete": ["door_closed(door)"]
+          }
+        },
+        {
+          "name": "cross_already_open_door",
+          "parameters": ["base", "door"],
+          "parameter_types": ["part", "fixture"],
+          "resources": ["doorway_zone"],
+          "action_type": "navigation",
+          "duration_ticks": 3,
+          "timeout_ticks": 25,
+          "preconditions": [
+            "system_ready()",
+            "robot_ready(unitree_go2_z1)",
+            "holding(unitree_go2_z1,base)",
+            "docked(unitree_go2_z1,door_staging)",
+            "door_open(door)"
+          ],
+          "effects": {
+            "add": ["docked(unitree_go2_z1,beyond_door)"],
+            "delete": []
+          }
+        },
+        {
+          "name": "navigate_delivery_room",
+          "parameters": ["base"],
+          "parameter_types": ["part"],
+          "resources": [],
+          "action_type": "navigation",
+          "duration_ticks": 4,
+          "timeout_ticks": 30,
+          "preconditions": [
+            "system_ready()",
+            "robot_ready(unitree_go2_z1)",
+            "holding(unitree_go2_z1,base)",
+            "docked(unitree_go2_z1,beyond_door)",
+            "door_open(room_door)"
+          ],
+          "effects": {
+            "add": ["docked(unitree_go2_z1,destination_dock)"],
+            "delete": ["docked(unitree_go2_z1,beyond_door)"]
+          }
+        },
+        {
+          "name": "place_parcel_at_delivery_station",
+          "parameters": ["base", "station"],
+          "parameter_types": ["part", "location"],
+          "resources": ["delivery_zone"],
+          "action_type": "manipulation",
+          "duration_ticks": 2,
+          "timeout_ticks": 25,
+          "preconditions": [
+            "system_ready()",
+            "robot_ready(unitree_go2_z1)",
+            "base_stationary(unitree_go2_z1)",
+            "holding(unitree_go2_z1,base)",
+            "docked(unitree_go2_z1,destination_dock)",
+            "door_open(room_door)"
+          ],
+          "effects": {
+            "add": ["at(base,station)", "delivered(base,station)", "gripper_empty(unitree_go2_z1)"],
+            "delete": ["holding(unitree_go2_z1,base)"]
+          }
+        },
+        {
+          "name": "stow_after_delivery",
+          "parameters": ["base"],
+          "parameter_types": ["part"],
+          "resources": ["delivery_zone"],
+          "action_type": "verification",
+          "duration_ticks": 2,
+          "timeout_ticks": 12,
+          "preconditions": [
+            "robot_ready(unitree_go2_z1)",
+            "base_stationary(unitree_go2_z1)",
+            "at(base,delivery_station)",
+            "gripper_empty(unitree_go2_z1)"
+          ],
+          "effects": {"add": ["arm_stowed(unitree_go2_z1)"], "delete": []}
+        }
+      ]
+    }
+  ]
+}
+

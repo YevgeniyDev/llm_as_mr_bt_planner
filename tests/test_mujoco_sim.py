@@ -15,11 +15,15 @@ from llm_mr_bt_planner.config import PROJECT_ROOT
 from llm_mr_bt_planner.domain import load_scenario
 from llm_mr_bt_planner.mujoco_sim.assets import _is_valid, default_asset_root
 from llm_mr_bt_planner.mujoco_sim.controllers import ContactGaitController, build_arm_controllers
-from llm_mr_bt_planner.mujoco_sim.executor import PANDA_GRASP_ROTATIONS, PhysicalExecutor
+from llm_mr_bt_planner.mujoco_sim.executor import (
+    PANDA_GRASP_ROTATIONS,
+    PhysicalExecutor,
+)
 from llm_mr_bt_planner.mujoco_sim.runner import _configure_free_camera
 from llm_mr_bt_planner.mujoco_sim.world import (
     DESTINATION_DOCK_X,
     DOCK_Y,
+    PACKAGING_STATION_POSES,
     PANDA_MOUNT_POSES,
     SOURCE_DOCK_X,
     STATION_PAD_HALF_EXTENTS,
@@ -62,6 +66,54 @@ def test_composed_scene_has_three_isolated_robots_and_dynamic_payload(menagerie_
         + STATION_PAD_HALF_EXTENTS["target_fixture"][:2]
     )
     assert np.any(zone_delta > zone_extent_sum), "green destination pad overlaps the red target fixture"
+
+
+def test_packaging_scene_contains_independent_parts_and_a_closed_dynamic_door(
+    menagerie_assets: Path,
+):
+    world = CourierWorld.build(
+        menagerie_assets,
+        task_id="three_robot_packaging_delivery",
+    )
+
+    assert set(PACKAGING_STATION_POSES) - {"lid_seal_target"} <= set(world.station_sites)
+    assert world.model.body("package_lid").jntnum == 1
+    assert world.model.joint("room_door_hinge").type == mujoco.mjtJoint.mjJNT_HINGE
+    assert world.door_closed()
+    assert not world.door_open()
+    assert not world.equality_active("package_seal")
+    assert world.model.geom("room_door_panel").id >= 0
+    assert world.model.geom("delivery_pedestal_top").id >= 0
+
+
+def test_physical_blackboard_canonicalizes_llm_predicate_whitespace(
+    menagerie_assets: Path,
+):
+    world = CourierWorld.build(
+        menagerie_assets,
+        task_id="three_robot_packaging_delivery",
+    )
+    arms = build_arm_controllers(world)
+    gait = ContactGaitController(world)
+    scenario = load_scenario(
+        PROJECT_ROOT / "examples" / "three_robot_packaging_delivery.json",
+        strict=True,
+    )
+    plan = load_plan_file(
+        PROJECT_ROOT / "examples" / "three_robot_packaging_delivery.bt.json"
+    )
+    executor = PhysicalExecutor(
+        world,
+        scenario,
+        plan,
+        arms,
+        gait,
+        progress=lambda _message: None,
+    )
+    executor._add_signal("assembly_audited(package_base,package_lid)")
+
+    assert executor.observe_literal("assembly_audited(package_base,package_lid)")
+    assert executor.observe_literal("assembly_audited(package_base, package_lid)")
 
 
 def test_pandas_are_bench_mounted_and_target_sites_are_hidden(menagerie_assets: Path):
@@ -220,3 +272,52 @@ def test_reference_bt_reaches_all_measured_physical_goals(menagerie_assets: Path
         assert minimum < -0.15
         assert maximum > 0.15
         assert maximum - minimum > np.deg2rad(45.0)
+
+
+@pytest.mark.skipif(
+    os.environ.get("LMRBTP_RUN_MUJOCO_E2E") != "1",
+    reason="Set LMRBTP_RUN_MUJOCO_E2E=1 to run the packaging physical integration test.",
+)
+def test_packaging_reference_assembles_opens_door_and_delivers(menagerie_assets: Path):
+    task_id = "three_robot_packaging_delivery"
+    world = CourierWorld.build(menagerie_assets, task_id=task_id)
+    arms = build_arm_controllers(world)
+    gait = ContactGaitController(world)
+    scenario = load_scenario(
+        PROJECT_ROOT / "examples" / "three_robot_packaging_delivery.json",
+        strict=True,
+    )
+    plan = load_plan_file(
+        PROJECT_ROOT / "examples" / "three_robot_packaging_delivery.bt.json"
+    )
+    executor = PhysicalExecutor(world, scenario, plan, arms, gait, progress=lambda _message: None)
+
+    for _ in range(round(1.0 / world.model.opt.timestep)):
+        gait.step()
+        for arm in arms.values():
+            arm.hold()
+        mujoco.mj_step(world.model, world.data)
+
+    while not executor.complete and not executor.failed and world.data.time < 120.0:
+        executor.step(float(world.model.opt.timestep))
+        mujoco.mj_step(world.model, world.data)
+    report = executor.make_report()
+
+    assert report.success, report.reason
+    assert all(report.final_goals.values())
+    assert report.physics["resources_released"] is True
+    evidence = report.physics["packaging_delivery_evidence"]
+    assert evidence["door_initially_closed"] is True
+    assert evidence["door_physically_open"] is True
+    assert evidence["final_door_angle_radians"] > 0.7
+    assert evidence["package_seal_constraint_active"] is True
+    assert evidence["parcel_physically_delivered"] is True
+    door_event = next(
+        event
+        for event in report.action_events
+        if event.get("message", "").startswith("push_open_door_and_cross")
+        and event["kind"] == "action_success"
+    )
+    assert "sealed parcel remained in the Z1 grasp" in door_event["detail"]
+    assert report.locomotion["contact_driven_displacement_m"] > 2.0
+    assert report.locomotion["direct_base_state_writes"] == 0

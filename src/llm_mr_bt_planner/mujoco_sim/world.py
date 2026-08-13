@@ -1,4 +1,4 @@
-"""Composition and measured state for the heterogeneous courier scene."""
+"""Composition and measured state for the heterogeneous three-robot scenes."""
 
 from __future__ import annotations
 
@@ -9,15 +9,24 @@ import mujoco
 import numpy as np
 
 SOURCE_DOCK_X = 0.00
+DOOR_STAGING_X = 1.02
+BEYOND_DOOR_X = 1.92
 DESTINATION_DOCK_X = 3.00
 DOCK_Y = 0.54
+ROOM_ROUTE_Y = 0.76
 PAYLOAD_HALF_SIZE = 0.020
+PACKAGE_LID_HALF_SIZE = np.array([0.018, 0.018, 0.006])
 WORKBENCH_TOP_Z = 0.490
 PANDA_MOUNT_Z = 0.502
 
 PANDA_MOUNT_POSES: dict[str, np.ndarray] = {
     "franka_a": np.array([-0.48, -0.25, PANDA_MOUNT_Z]),
     "franka_b": np.array([3.48, -0.25, PANDA_MOUNT_Z]),
+}
+
+PACKAGING_PANDA_MOUNT_POSES: dict[str, np.ndarray] = {
+    "franka_a": np.array([-0.52, -0.25, PANDA_MOUNT_Z]),
+    "franka_b": np.array([0.52, -0.25, PANDA_MOUNT_Z]),
 }
 
 STATION_POSES: dict[str, np.ndarray] = {
@@ -27,6 +36,14 @@ STATION_POSES: dict[str, np.ndarray] = {
     "target_fixture": np.array([3.00, -0.48, 0.510]),
 }
 
+PACKAGING_STATION_POSES: dict[str, np.ndarray] = {
+    "base_supply": np.array([-0.24, -0.48, 0.510]),
+    "lid_supply": np.array([0.24, -0.48, 0.496]),
+    "packing_station": np.array([0.00, 0.15, 0.510]),
+    "lid_seal_target": np.array([0.00, 0.15, 0.536]),
+    "delivery_station": np.array([3.00, 0.37, 0.550]),
+}
+
 STATION_PAD_HALF_EXTENTS: dict[str, np.ndarray] = {
     "source_bin": np.array([0.085, 0.075, 0.008]),
     "source_cradle": np.array([0.085, 0.075, 0.028]),
@@ -34,8 +51,29 @@ STATION_PAD_HALF_EXTENTS: dict[str, np.ndarray] = {
     "target_fixture": np.array([0.085, 0.075, 0.012]),
 }
 
+PACKAGING_STATION_PAD_HALF_EXTENTS: dict[str, np.ndarray] = {
+    "base_supply": np.array([0.085, 0.075, 0.008]),
+    "lid_supply": np.array([0.075, 0.065, 0.003]),
+    "packing_station": np.array([0.10, 0.085, 0.008]),
+    "delivery_station": np.array([0.12, 0.10, 0.028]),
+}
+
+DOCK_POSES: dict[str, np.ndarray] = {
+    "source_dock": np.array([SOURCE_DOCK_X, DOCK_Y]),
+    "door_staging": np.array([DOOR_STAGING_X, DOCK_Y]),
+    "beyond_door": np.array([BEYOND_DOOR_X, DOCK_Y]),
+    "destination_dock": np.array([DESTINATION_DOCK_X, DOCK_Y]),
+}
+
+PACKAGING_DOCK_POSES: dict[str, np.ndarray] = {
+    "source_dock": np.array([SOURCE_DOCK_X, DOCK_Y]),
+    "door_staging": np.array([DOOR_STAGING_X, DOCK_Y]),
+    "beyond_door": np.array([BEYOND_DOOR_X, ROOM_ROUTE_Y]),
+    "destination_dock": np.array([DESTINATION_DOCK_X, ROOM_ROUTE_Y]),
+}
+
 _ARENA_XML = """
-<mujoco model="three_robot_courier">
+<mujoco model="three_robot_team">
   <compiler angle="radian" autolimits="true"/>
   <option timestep="0.002" integrator="implicitfast" cone="elliptic" impratio="100"/>
   <visual><global azimuth="135" elevation="-24"/></visual>
@@ -62,120 +100,79 @@ class CourierWorld:
     station_sites: dict[str, int]
     grip_equalities: dict[str, int]
     z1_finger_pad_geoms: dict[str, frozenset[int]]
+    object_body_ids: dict[str, int]
     payload_body_id: int
     base_body_id: int
     initial_base_xy: np.ndarray
+    task_id: str = "three_robot_courier"
+    source_location: str = "source_bin"
+    door_joint_id: int | None = None
     qpos_writes_after_reset: int = 0
 
     @classmethod
-    def build(cls, assets: Path) -> "CourierWorld":
+    def build(cls, assets: Path, *, task_id: str = "three_robot_courier") -> "CourierWorld":
+        packaging = task_id == "three_robot_packaging_delivery"
+        station_poses = PACKAGING_STATION_POSES if packaging else STATION_POSES
+        mount_poses = PACKAGING_PANDA_MOUNT_POSES if packaging else PANDA_MOUNT_POSES
         spec = mujoco.MjSpec.from_string(_ARENA_XML)
-        _add_stations(spec)
+        if packaging:
+            _add_packaging_scene(spec)
+        else:
+            _add_courier_scene(spec)
 
         go2 = _load_child(assets / "unitree_go2" / "go2.xml", spec)
         z1 = _load_child(assets / "unitree_z1" / "z1_gripper.xml", spec)
         z1.body("link06").add_site(
             name="grasp_site",
-            # Midpoint between the finger-pad contact surfaces at the
-            # -0.50 rad command used for the 40 mm payload.
             pos=[0.18205, 0.0, 0.01145],
             size=[0.012],
             rgba=[0.95, 0.2, 0.1, 0.8],
         )
         mount = go2.body("base").add_frame(name="z1_mount", pos=[0.05, 0.0, 0.10])
         mount.attach_body(z1.body("link00"), prefix="z1_")
-
         spec.worldbody.add_frame(name="go2_start", pos=[SOURCE_DOCK_X, DOCK_Y, 0.0]).attach_body(
             go2.body("base"), prefix="go2_"
         )
 
-        _attach_panda(spec, assets, "franka_a_", PANDA_MOUNT_POSES["franka_a"].tolist(), 0.0)
-        _attach_panda(spec, assets, "franka_b_", PANDA_MOUNT_POSES["franka_b"].tolist(), np.pi)
+        _attach_panda(spec, assets, "franka_a_", mount_poses["franka_a"].tolist(), 0.0)
+        _attach_panda(spec, assets, "franka_b_", mount_poses["franka_b"].tolist(), np.pi)
 
-        spec.add_equality(
-            name="grip_franka_a",
-            type=mujoco.mjtEq.mjEQ_WELD,
-            objtype=mujoco.mjtObj.mjOBJ_BODY,
-            active=0,
-            name1="franka_a_hand",
-            name2="payload",
-            solref=[0.005, 1.0],
-            solimp=[0.95, 0.99, 0.001, 0.5, 2.0],
-        )
-        spec.add_equality(
-            name="grip_unitree_go2_z1",
-            type=mujoco.mjtEq.mjEQ_WELD,
-            objtype=mujoco.mjtObj.mjOBJ_BODY,
-            active=0,
-            name1="go2_z1_link06",
-            name2="payload",
-            solref=[0.005, 1.0],
-            solimp=[0.95, 0.99, 0.001, 0.5, 2.0],
-        )
-        spec.add_equality(
-            name="grip_franka_b",
-            type=mujoco.mjtEq.mjEQ_WELD,
-            objtype=mujoco.mjtObj.mjOBJ_BODY,
-            active=0,
-            name1="franka_b_hand",
-            name2="payload",
-            solref=[0.005, 1.0],
-            solimp=[0.95, 0.99, 0.001, 0.5, 2.0],
-        )
-        spec.add_equality(
-            name="install_fixture",
-            type=mujoco.mjtEq.mjEQ_WELD,
-            objtype=mujoco.mjtObj.mjOBJ_BODY,
-            active=0,
-            name1="target_fixture_body",
-            name2="payload",
-            solref=[0.005, 1.0],
-            solimp=[0.95, 0.99, 0.001, 0.5, 2.0],
-        )
+        _add_weld(spec, "grip_franka_a", "franka_a_hand", "payload")
+        _add_weld(spec, "grip_unitree_go2_z1", "go2_z1_link06", "payload")
+        _add_weld(spec, "grip_franka_b", "franka_b_hand", "payload")
+        if packaging:
+            _add_weld(spec, "grip_franka_b_package_lid", "franka_b_hand", "package_lid")
+            _add_weld(spec, "package_seal", "payload", "package_lid")
+        else:
+            _add_weld(spec, "install_fixture", "target_fixture_body", "payload")
 
         model = spec.compile()
-        # The Menagerie gripper includes conservative collision meshes for the
-        # stator/mover housings as well as dedicated box geoms for the actual
-        # finger pads.  Use the pads as grasp contacts so the housing cannot
-        # eject an object before the jaws surround it; visuals remain intact.
-        for geom_id in range(model.ngeom):
-            body_name = model.body(int(model.geom_bodyid[geom_id])).name
-            if body_name in {"go2_z1_link06", "go2_z1_gripperMover"} and model.geom_type[
-                geom_id
-            ] == mujoco.mjtGeom.mjGEOM_MESH:
-                model.geom_contype[geom_id] = 0
-                model.geom_conaffinity[geom_id] = 0
-            if (
-                body_name in {"go2_z1_link06", "go2_z1_gripperMover"}
-                and model.geom_type[geom_id] == mujoco.mjtGeom.mjGEOM_BOX
-                and np.allclose(model.geom_size[geom_id], [0.014, 0.015, 0.004])
-            ):
-                model.geom_solref[geom_id] = [0.02, 1.0]
-                model.geom_solimp[geom_id] = [0.85, 0.95, 0.002, 0.5, 2.0]
-            if model.geom(geom_id).name in {"go2_FL", "go2_FR", "go2_RL", "go2_RR"}:
-                # Rubber-foot contact: prevent arm reaction forces from sliding
-                # a stationary Go2 while preserving fully dynamic contacts.
-                model.geom_friction[geom_id] = [1.6, 0.02, 0.01]
-        # Match mjctrl's arm setup: compensate arm-link gravity while contacts and
-        # actuator dynamics remain active.  The Go2 trunk/legs and payload retain
-        # their full gravity so locomotion and transport stay physically coupled.
-        for body_id in range(model.nbody):
-            body_name = model.body(body_id).name
-            if body_name.startswith("franka_a_") or body_name.startswith("franka_b_") or body_name.startswith(
-                "go2_z1_"
-            ):
-                model.body_gravcomp[body_id] = 1.0
+        _configure_contacts_and_gravity(model)
         data = mujoco.MjData(model)
+        grip_equalities = {
+            "franka_a": model.equality("grip_franka_a").id,
+            "unitree_go2_z1": model.equality("grip_unitree_go2_z1").id,
+            "franka_b": model.equality("grip_franka_b").id,
+        }
+        if packaging:
+            grip_equalities.update(
+                {
+                    "franka_b:package_lid": model.equality("grip_franka_b_package_lid").id,
+                    "package_seal": model.equality("package_seal").id,
+                }
+            )
+        else:
+            grip_equalities["target_fixture"] = model.equality("install_fixture").id
+
+        object_body_ids = {"payload": model.body("payload").id}
+        if packaging:
+            object_body_ids["package_lid"] = model.body("package_lid").id
+
         world = cls(
             model=model,
             data=data,
-            station_sites={name: model.site(f"station_{name}").id for name in STATION_POSES},
-            grip_equalities={
-                "franka_a": model.equality("grip_franka_a").id,
-                "unitree_go2_z1": model.equality("grip_unitree_go2_z1").id,
-                "franka_b": model.equality("grip_franka_b").id,
-                "target_fixture": model.equality("install_fixture").id,
-            },
+            station_sites={name: model.site(f"station_{name}").id for name in station_poses},
+            grip_equalities=grip_equalities,
             z1_finger_pad_geoms={
                 side: frozenset(
                     geom_id
@@ -189,9 +186,13 @@ class CourierWorld:
                     "moving": "go2_z1_gripperMover",
                 }.items()
             },
+            object_body_ids=object_body_ids,
             payload_body_id=model.body("payload").id,
             base_body_id=model.body("go2_base").id,
             initial_base_xy=np.array([SOURCE_DOCK_X, DOCK_Y]),
+            task_id=task_id,
+            source_location="base_supply" if packaging else "source_bin",
+            door_joint_id=model.joint("room_door_hinge").id if packaging else None,
         )
         world.reset()
         return world
@@ -216,16 +217,27 @@ class CourierWorld:
 
         panda_home = (0.0, 0.0, 0.0, -1.57079, 0.0, 1.57079, -0.7853)
         for prefix in ("franka_a_", "franka_b_"):
-            for index, value in enumerate(panda_home, 1):
+            home = list(panda_home)
+            if self.task_id == "three_robot_packaging_delivery":
+                # Turn both elbows toward their own half of the shared bench.
+                # With the courier home pose, the opposed hands overlap at the
+                # bench center before either BT has started.
+                home[0] = 0.8 if prefix == "franka_a_" else -0.8
+            for index, value in enumerate(home, 1):
                 self._set_qpos(f"{prefix}joint{index}", value)
                 self.data.ctrl[self.model.actuator(f"{prefix}actuator{index}").id] = value
             self._set_qpos(f"{prefix}finger_joint1", 0.04)
             self._set_qpos(f"{prefix}finger_joint2", 0.04)
             self.data.ctrl[self.model.actuator(f"{prefix}actuator8").id] = 255.0
 
-        payload_joint = int(self.model.body(self.payload_body_id).jntadr[0])
-        payload_qadr = int(self.model.jnt_qposadr[payload_joint])
-        self.data.qpos[payload_qadr : payload_qadr + 7] = [*STATION_POSES["source_bin"], 1, 0, 0, 0]
+        poses = PACKAGING_STATION_POSES if self.task_id == "three_robot_packaging_delivery" else STATION_POSES
+        self._set_free_body_pose("payload", poses[self.source_location])
+        if "package_lid" in self.object_body_ids:
+            self._set_free_body_pose("package_lid", poses["lid_supply"])
+        if self.door_joint_id is not None:
+            door_qadr = int(self.model.jnt_qposadr[self.door_joint_id])
+            self.data.qpos[door_qadr] = 0.0
+
         self.data.qvel[:] = 0
         self.data.ctrl[:12] = 0
         mujoco.mj_forward(self.model, self.data)
@@ -233,7 +245,10 @@ class CourierWorld:
 
     @property
     def payload_position(self) -> np.ndarray:
-        return self.data.xpos[self.payload_body_id].copy()
+        return self.object_position("payload")
+
+    def object_position(self, name: str) -> np.ndarray:
+        return self.data.xpos[self.object_body_ids[name]].copy()
 
     @property
     def base_position(self) -> np.ndarray:
@@ -248,8 +263,16 @@ class CourierWorld:
     def site_position(self, name: str) -> np.ndarray:
         return self.data.site(f"station_{name}").xpos.copy()
 
+    def dock_position(self, name: str) -> np.ndarray:
+        poses = PACKAGING_DOCK_POSES if self.task_id == "three_robot_packaging_delivery" else DOCK_POSES
+        return poses[name].copy()
+
     def equality_active(self, owner: str) -> bool:
         return bool(self.data.eq_active[self.grip_equalities[owner]])
+
+    def robot_holding_any(self, robot: str) -> bool:
+        keys = [key for key in self.grip_equalities if key == robot or key.startswith(f"{robot}:")]
+        return any(self.equality_active(key) for key in keys)
 
     def activate_weld(self, owner: str) -> None:
         """Activate a weld at the current relative pose, avoiding any object snap."""
@@ -272,7 +295,13 @@ class CourierWorld:
         self.data.eq_active[self.grip_equalities[owner]] = 0
 
     def set_cradle_holding_friction(self, location: str, *, enabled: bool) -> None:
-        if location not in {"source_cradle", "destination_cradle"}:
+        supported = {
+            "source_cradle",
+            "destination_cradle",
+            "packing_station",
+            "delivery_station",
+        }
+        if location not in supported:
             return
         geom_id = self.model.geom(f"{location}_pad").id
         self.model.geom_friction[geom_id] = [4.0, 0.08, 0.015] if enabled else [1.2, 0.02, 0.005]
@@ -281,17 +310,21 @@ class CourierWorld:
             [3.0, 0.06, 0.012] if enabled else [1.4, 0.03, 0.008]
         )
 
-    def payload_contact_with(self, body_prefix: str) -> bool:
+    def object_contact_with(self, object_name: str, body_prefix: str) -> bool:
+        object_body_id = self.object_body_ids[object_name]
         for index in range(self.data.ncon):
             contact = self.data.contact[index]
             body1 = int(self.model.geom_bodyid[contact.geom1])
             body2 = int(self.model.geom_bodyid[contact.geom2])
-            if self.payload_body_id not in {body1, body2}:
+            if object_body_id not in {body1, body2}:
                 continue
-            other = body2 if body1 == self.payload_body_id else body1
+            other = body2 if body1 == object_body_id else body1
             if self.model.body(other).name.startswith(body_prefix):
                 return True
         return False
+
+    def payload_contact_with(self, body_prefix: str) -> bool:
+        return self.object_contact_with("payload", body_prefix)
 
     def payload_contact_with_z1_finger_pad(self, side: str) -> bool:
         pad_geoms = self.z1_finger_pad_geoms[side]
@@ -306,8 +339,27 @@ class CourierWorld:
                 return True
         return False
 
+    @property
+    def door_angle(self) -> float:
+        if self.door_joint_id is None:
+            return 0.0
+        qadr = int(self.model.jnt_qposadr[self.door_joint_id])
+        return float(self.data.qpos[qadr])
+
+    def door_open(self) -> bool:
+        return self.door_joint_id is not None and self.door_angle > 0.70
+
+    def door_closed(self) -> bool:
+        return self.door_joint_id is not None and abs(self.door_angle) < 0.12
+
     def finite(self) -> bool:
         return bool(np.isfinite(self.data.qpos).all() and np.isfinite(self.data.qvel).all())
+
+    def _set_free_body_pose(self, body_name: str, position: np.ndarray) -> None:
+        body_id = self.object_body_ids[body_name]
+        joint_id = int(self.model.body(body_id).jntadr[0])
+        qadr = int(self.model.jnt_qposadr[joint_id])
+        self.data.qpos[qadr : qadr + 7] = [*position, 1, 0, 0, 0]
 
     def _set_qpos(self, joint_name: str, value: float) -> None:
         joint = self.model.joint(joint_name)
@@ -338,53 +390,221 @@ def _attach_panda(spec: mujoco.MjSpec, assets: Path, prefix: str, pos: list[floa
     )
 
 
-def _add_stations(spec: mujoco.MjSpec) -> None:
+def _add_weld(spec: mujoco.MjSpec, name: str, body1: str, body2: str) -> None:
+    spec.add_equality(
+        name=name,
+        type=mujoco.mjtEq.mjEQ_WELD,
+        objtype=mujoco.mjtObj.mjOBJ_BODY,
+        active=0,
+        name1=body1,
+        name2=body2,
+        solref=[0.005, 1.0],
+        solimp=[0.95, 0.99, 0.001, 0.5, 2.0],
+    )
+
+
+def _configure_contacts_and_gravity(model: mujoco.MjModel) -> None:
+    for geom_id in range(model.ngeom):
+        body_name = model.body(int(model.geom_bodyid[geom_id])).name
+        if body_name in {"go2_z1_link06", "go2_z1_gripperMover"} and model.geom_type[
+            geom_id
+        ] == mujoco.mjtGeom.mjGEOM_MESH:
+            model.geom_contype[geom_id] = 0
+            model.geom_conaffinity[geom_id] = 0
+        if (
+            body_name in {"go2_z1_link06", "go2_z1_gripperMover"}
+            and model.geom_type[geom_id] == mujoco.mjtGeom.mjGEOM_BOX
+            and np.allclose(model.geom_size[geom_id], [0.014, 0.015, 0.004])
+        ):
+            model.geom_solref[geom_id] = [0.02, 1.0]
+            model.geom_solimp[geom_id] = [0.85, 0.95, 0.002, 0.5, 2.0]
+        if model.geom(geom_id).name in {"go2_FL", "go2_FR", "go2_RL", "go2_RR"}:
+            model.geom_friction[geom_id] = [1.6, 0.02, 0.01]
+    for body_id in range(model.nbody):
+        body_name = model.body(body_id).name
+        if body_name.startswith(("franka_a_", "franka_b_", "go2_z1_")):
+            model.body_gravcomp[body_id] = 1.0
+
+
+def _add_courier_scene(spec: mujoco.MjSpec) -> None:
     _add_workbench(
         spec,
         "source",
         center_x=0.00,
         half_x=0.65,
-        panda_mount=PANDA_MOUNT_POSES["franka_a"][:2],
+        mounts={"panda": PANDA_MOUNT_POSES["franka_a"][:2]},
     )
     _add_workbench(
         spec,
         "destination",
         center_x=3.00,
         half_x=0.65,
-        panda_mount=PANDA_MOUNT_POSES["franka_b"][:2],
+        mounts={"panda": PANDA_MOUNT_POSES["franka_b"][:2]},
     )
-
     colors = {
         "source_bin": [0.75, 0.45, 0.10, 1.0],
         "source_cradle": [0.15, 0.48, 0.42, 1.0],
         "destination_cradle": [0.16, 0.62, 0.30, 1.0],
         "target_fixture": [0.68, 0.16, 0.18, 1.0],
     }
-    for name, position in STATION_POSES.items():
+    _add_station_pads(spec, STATION_POSES, STATION_PAD_HALF_EXTENTS, colors)
+    _add_payload(spec, STATION_POSES["source_bin"])
+
+
+def _add_packaging_scene(spec: mujoco.MjSpec) -> None:
+    _add_workbench(
+        spec,
+        "packing",
+        center_x=0.00,
+        half_x=0.78,
+        mounts={
+            "franka_a": PACKAGING_PANDA_MOUNT_POSES["franka_a"][:2],
+            "franka_b": PACKAGING_PANDA_MOUNT_POSES["franka_b"][:2],
+        },
+    )
+    _add_delivery_pedestal(spec)
+    colors = {
+        "base_supply": [0.16, 0.40, 0.76, 1.0],
+        "lid_supply": [0.88, 0.64, 0.10, 1.0],
+        "packing_station": [0.16, 0.62, 0.30, 1.0],
+        "delivery_station": [0.52, 0.22, 0.72, 1.0],
+    }
+    public_poses = {
+        name: pose for name, pose in PACKAGING_STATION_POSES.items() if name != "lid_seal_target"
+    }
+    _add_station_pads(spec, public_poses, PACKAGING_STATION_PAD_HALF_EXTENTS, colors)
+    marker = spec.worldbody.add_body(
+        name="lid_seal_target_marker", pos=PACKAGING_STATION_POSES["lid_seal_target"]
+    )
+    marker.add_site(name="station_lid_seal_target", size=[0.006], rgba=[1.0, 0.9, 0.1, 0.0])
+    _add_payload(spec, PACKAGING_STATION_POSES["base_supply"], color=[0.16, 0.42, 0.78, 1.0])
+    lid = spec.worldbody.add_body(name="package_lid", pos=PACKAGING_STATION_POSES["lid_supply"])
+    lid.add_freejoint(name="package_lid_freejoint")
+    lid.add_geom(
+        name="package_lid_geom",
+        type=mujoco.mjtGeom.mjGEOM_BOX,
+        size=PACKAGE_LID_HALF_SIZE,
+        mass=0.035,
+        rgba=[0.95, 0.72, 0.12, 1.0],
+        friction=[1.4, 0.03, 0.008],
+        condim=6,
+    )
+    _add_room_and_door(spec)
+
+
+def _add_station_pads(
+    spec: mujoco.MjSpec,
+    poses: dict[str, np.ndarray],
+    extents: dict[str, np.ndarray],
+    colors: dict[str, list[float]],
+) -> None:
+    for name, position in poses.items():
         body = spec.worldbody.add_body(name=f"{name}_body", pos=position)
+        object_half_height = PACKAGE_LID_HALF_SIZE[2] if name == "lid_supply" else PAYLOAD_HALF_SIZE
         body.add_geom(
             name=f"{name}_pad",
             type=mujoco.mjtGeom.mjGEOM_BOX,
-            pos=[0.0, 0.0, -(PAYLOAD_HALF_SIZE + float(STATION_PAD_HALF_EXTENTS[name][2]))],
-            size=STATION_PAD_HALF_EXTENTS[name],
+            pos=[0.0, 0.0, -(float(object_half_height) + float(extents[name][2]))],
+            size=extents[name],
             rgba=colors[name],
             friction=[1.2, 0.02, 0.005],
         )
-        # Sites remain exact controller/predicate references but are invisible
-        # in the finished scene.  Unlike geoms, sites never create contacts.
         body.add_site(name=f"station_{name}", size=[0.006], rgba=[1.0, 0.9, 0.1, 0.0])
 
-    payload = spec.worldbody.add_body(name="payload", pos=STATION_POSES["source_bin"])
+
+def _add_payload(
+    spec: mujoco.MjSpec,
+    position: np.ndarray,
+    *,
+    color: list[float] | None = None,
+) -> None:
+    payload = spec.worldbody.add_body(name="payload", pos=position)
     payload.add_freejoint(name="payload_freejoint")
     payload.add_geom(
         name="payload_geom",
         type=mujoco.mjtGeom.mjGEOM_BOX,
         size=[PAYLOAD_HALF_SIZE] * 3,
         mass=0.12,
-        rgba=[0.95, 0.80, 0.12, 1.0],
+        rgba=color or [0.95, 0.80, 0.12, 1.0],
         friction=[1.4, 0.03, 0.008],
         condim=6,
     )
+
+
+def _add_room_and_door(spec: mujoco.MjSpec) -> None:
+    wall = spec.worldbody.add_body(name="room_partition", pos=[0.0, 0.0, 0.0])
+    wall_color = [0.64, 0.68, 0.72, 1.0]
+    wall.add_geom(
+        name="room_wall_lower",
+        type=mujoco.mjtGeom.mjGEOM_BOX,
+        pos=[1.50, -1.50, 0.75],
+        size=[0.055, 1.50, 0.75],
+        rgba=wall_color,
+    )
+    wall.add_geom(
+        name="room_wall_upper",
+        type=mujoco.mjtGeom.mjGEOM_BOX,
+        pos=[1.50, 2.01, 0.75],
+        size=[0.055, 0.99, 0.75],
+        rgba=wall_color,
+    )
+    wall.add_geom(
+        name="room_wall_header",
+        type=mujoco.mjtGeom.mjGEOM_BOX,
+        pos=[1.50, 0.50, 1.39],
+        size=[0.055, 0.50, 0.11],
+        rgba=wall_color,
+    )
+
+    # The frame leaves real clearance around the dynamic panel.  Earlier
+    # dimensions overlapped both the jamb and header, effectively pinning the
+    # hinge even though its joint was free.
+    door = spec.worldbody.add_body(name="room_door", pos=[1.50, 0.04, 0.0])
+    door.add_joint(
+        name="room_door_hinge",
+        type=mujoco.mjtJoint.mjJNT_HINGE,
+        axis=[0.0, 0.0, -1.0],
+        range=[0.0, 1.65],
+        damping=0.12,
+        armature=0.006,
+    )
+    door.add_geom(
+        name="room_door_panel",
+        type=mujoco.mjtGeom.mjGEOM_BOX,
+        pos=[0.0, 0.45, 0.60],
+        size=[0.025, 0.43, 0.60],
+        mass=0.45,
+        rgba=[0.32, 0.18, 0.09, 1.0],
+        friction=[0.8, 0.02, 0.005],
+    )
+    door.add_geom(
+        name="room_door_push_bar",
+        type=mujoco.mjtGeom.mjGEOM_CAPSULE,
+        fromto=[-0.07, 0.20, 0.58, -0.07, 0.66, 0.58],
+        size=[0.025],
+        mass=0.05,
+        rgba=[0.75, 0.15, 0.08, 1.0],
+    )
+
+
+def _add_delivery_pedestal(spec: mujoco.MjSpec) -> None:
+    body = spec.worldbody.add_body(name="delivery_pedestal", pos=[3.0, 0.37, 0.0])
+    body.add_geom(
+        name="delivery_pedestal_top",
+        type=mujoco.mjtGeom.mjGEOM_BOX,
+        pos=[0.0, 0.0, 0.455],
+        size=[0.34, 0.30, 0.035],
+        rgba=[0.28, 0.30, 0.34, 1.0],
+        friction=[1.1, 0.02, 0.005],
+    )
+    for x in (-0.27, 0.27):
+        for y in (-0.23, 0.23):
+            body.add_geom(
+                type=mujoco.mjtGeom.mjGEOM_BOX,
+                pos=[x, y, 0.205],
+                size=[0.025, 0.025, 0.205],
+                rgba=[0.14, 0.15, 0.16, 1.0],
+            )
 
 
 def _add_workbench(
@@ -393,9 +613,9 @@ def _add_workbench(
     *,
     center_x: float,
     half_x: float,
-    panda_mount: np.ndarray,
+    mounts: dict[str, np.ndarray],
 ) -> None:
-    """Add a laboratory workbench that physically supports a Panda base."""
+    """Add a laboratory workbench that physically supports one or two Panda bases."""
     center_y = -0.25
     half_y = 0.50
     top = spec.worldbody.add_body(name=f"{name}_worktable", pos=[center_x, center_y, 0.0])
@@ -414,15 +634,17 @@ def _add_workbench(
         size=[half_x - 0.03, half_y - 0.03, 0.018],
         rgba=[0.18, 0.19, 0.20, 1.0],
     )
-    mount_local = np.asarray(panda_mount, dtype=float) - np.array([center_x, center_y])
-    top.add_geom(
-        name=f"{name}_panda_mounting_plate",
-        type=mujoco.mjtGeom.mjGEOM_CYLINDER,
-        pos=[float(mount_local[0]), float(mount_local[1]), 0.496],
-        size=[0.15, 0.006],
-        rgba=[0.20, 0.22, 0.24, 1.0],
-        friction=[1.2, 0.02, 0.005],
-    )
+    for label, panda_mount in mounts.items():
+        mount_local = np.asarray(panda_mount, dtype=float) - np.array([center_x, center_y])
+        plate_name = f"{name}_panda_mounting_plate" if label == "panda" else f"{name}_{label}_mounting_plate"
+        top.add_geom(
+            name=plate_name,
+            type=mujoco.mjtGeom.mjGEOM_CYLINDER,
+            pos=[float(mount_local[0]), float(mount_local[1]), 0.496],
+            size=[0.15, 0.006],
+            rgba=[0.20, 0.22, 0.24, 1.0],
+            friction=[1.2, 0.02, 0.005],
+        )
     for x_side, x in (("left", -(half_x - 0.06)), ("right", half_x - 0.06)):
         for y_side, y in (("rear", -(half_y - 0.06)), ("front", half_y - 0.06)):
             top.add_geom(

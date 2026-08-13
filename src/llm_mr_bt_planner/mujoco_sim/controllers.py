@@ -1,4 +1,4 @@
-"""Model-scoped physical controllers for the courier scene.
+"""Model-scoped physical controllers for the bundled three-robot scenes.
 
 The differential-IK implementation follows the damped least-squares and
 null-space structure demonstrated by kevinzakka/mjctrl (Apache-2.0), adapted
@@ -381,13 +381,18 @@ class ContactGaitController:
         return self.target_x is not None
 
     def navigate_to_destination(self) -> None:
-        if self.target_x is None:
+        self.navigate_to(DESTINATION_DOCK_X)
+
+    def navigate_to(self, target_x: float) -> None:
+        if self.target_x is None or abs(self.target_x - target_x) > 1e-6:
             self._set_foot_friction(0.8)
-            self.target_x = DESTINATION_DOCK_X
+            self.target_x = float(target_x)
             self.started_at = float(self.world.data.time)
-            self.start_x = float(self.world.base_position[0])
 
     def reached_destination(self) -> bool:
+        return self.reached_target()
+
+    def reached_target(self) -> bool:
         if self.target_x is None:
             return False
         error = abs(float(self.world.base_position[0]) - self.target_x)
@@ -473,13 +478,16 @@ def build_arm_controllers(world: CourierWorld) -> dict[str, ArmController]:
     controllers: dict[str, ArmController] = {}
     for robot in ("franka_a", "franka_b"):
         prefix = f"{robot}_"
+        robot_home = panda_home.copy()
+        if world.task_id == "three_robot_packaging_delivery":
+            robot_home[0] = 0.8 if robot == "franka_a" else -0.8
         controllers[robot] = ArmController(
             world=world,
             robot=robot,
             joint_names=tuple(f"{prefix}joint{i}" for i in range(1, 8)),
             actuator_names=tuple(f"{prefix}actuator{i}" for i in range(1, 8)),
             site_name=f"{prefix}grasp_site",
-            home=panda_home.copy(),
+            home=robot_home,
             gripper_actuator=f"{prefix}actuator8",
             gripper_open_value=255.0,
             gripper_closed_value=0.0,

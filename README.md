@@ -1,6 +1,6 @@
 # Multi-Robot Behavior Tree Planner
 
-This application uses OpenAI or Anthropic (Claude) to generate complete synchronized Behavior Trees for one three-robot courier mission. It then validates and symbolically simulates the model's exact trees and saves successful results as JSON and XML.
+This application uses OpenAI or Anthropic (Claude) to generate complete synchronized Behavior Trees for a heterogeneous three-robot team. It validates and symbolically simulates the model's exact trees, saves successful results as JSON and XML, and can execute the two bundled missions in a separate MuJoCo process.
 
 The demonstration team is:
 
@@ -36,7 +36,7 @@ lmrbtp ui --no-browser
 ## Generate a Behavior Tree
 
 1. Start the UI.
-2. Use the bundled runnable example, or upload a JSON scenario. Uploaded files are loaded and validated automatically.
+2. Select **Collaborative packing and room delivery** or **Three-robot courier** from the bundled-scenario dropdown, or upload another JSON scenario. Uploaded files are loaded and validated automatically.
 3. Edit the mission instruction if needed, then press **Validate scenario** after any manual change.
 4. Select `openai` or `anthropic` and enter that provider's API key.
 5. Press **Run complete pipeline**.
@@ -54,10 +54,12 @@ The **Cancel** button marks the run as cancelled. An HTTP request already being 
 
 The repository provides:
 
-- [Runnable example](examples/three_robot_courier.json)
-- [Committed reference BT](examples/three_robot_courier.bt.json) used only by "doctor" command for separate validation, simulation, and regression checks of generated BTs
+- [Collaborative packing and room-delivery scenario](examples/three_robot_packaging_delivery.json) and its [committed reference BT](examples/three_robot_packaging_delivery.bt.json)
+- [Courier scenario](examples/three_robot_courier.json) and its [committed reference BT](examples/three_robot_courier.bt.json)
 - [Blank template](templates/three_robot_scenario.template.json)
 - [JSON Schema](schemas/scenario.schema.json)
+
+The UI opens with the collaborative packing and room-delivery scenario. The CLI `generate` command retains the courier as its default; pass `--scenario` to select the packing mission. Reference BT files are used by `doctor`, regression tests, and adjacent-file MuJoCo examples. They are never substituted for an LLM response during generation.
 
 A scenario describes:
 
@@ -139,6 +141,13 @@ lmrbtp simulate --scenario examples/three_robot_courier.json --bt "C:\path\to\be
 
 These checks establish correctness only against the uploaded symbolic scenario. They do not establish collision-free trajectories, perception accuracy, dynamics, controller compatibility, ROS 2 integration, or physical-robot safety. The XML is a BehaviorTree.CPP-style serialization of the canonical JSON; it is not independently planned or hardware-ready by itself.
 
+For the packing and room-delivery mission, use the matching scenario:
+
+```powershell
+lmrbtp validate --scenario examples/three_robot_packaging_delivery.json --bt "C:\path\to\behavior_tree.json"
+lmrbtp simulate --scenario examples/three_robot_packaging_delivery.json --bt "C:\path\to\behavior_tree.json" --max-ticks 180
+```
+
 ## Command-line use
 
 Set the key for the provider you select:
@@ -155,6 +164,12 @@ $env:ANTHROPIC_API_KEY = "your-key"
 lmrbtp generate --provider anthropic --scenario examples/three_robot_courier.json
 ```
 
+Generate the packing and room-delivery mission by changing only the scenario path:
+
+```powershell
+lmrbtp generate --provider openai --scenario examples/three_robot_packaging_delivery.json --max-ticks 180
+```
+
 Other commands do not call an LLM:
 
 ```powershell
@@ -167,7 +182,7 @@ lmrbtp doctor
 
 On successful generation, the final console lines provide `BT_FILE=<absolute path>` and `BT_SHA256=<hash>`.
 
-## Run the first scenario in MuJoCo
+## Run the bundled scenarios in MuJoCo
 
 The physical simulator is a separate optional subsystem. It reads a scenario and an already-generated BT; it does not import the provider clients, call OpenAI or Anthropic, generate a different tree, or apply symbolic capability effects.
 
@@ -190,21 +205,45 @@ For a fast run without a window:
 lmrbtp mujoco --headless
 ```
 
-Both forms default to [the first scenario](examples/three_robot_courier.json) and [its committed BT](examples/three_robot_courier.bt.json). A generated BT for that same scenario can be supplied explicitly:
+Both forms default to [the courier scenario](examples/three_robot_courier.json) and [its committed BT](examples/three_robot_courier.bt.json). A generated BT for that same scenario can be supplied explicitly:
 
 ```powershell
 lmrbtp mujoco --bt "C:\path\to\behavior_tree.json"
 ```
 
-The command statically validates the BT first, composes one MuJoCo world, settles all three robots, and then executes the BT leaves concurrently. It prints action/resource progress and writes `physical_execution_report.json` under `outputs/mujoco/`. A failure returns a nonzero exit code and identifies the robot, node, failed measured predicate, controller stage, or timeout.
+Run the collaborative packing and room-delivery mission with its adjacent reference BT:
 
-This first adapter deliberately supports only `three_robot_courier`; it rejects a different task instead of silently mapping it to the courier. The world contains two independently prefixed 7-DoF Panda models, two separated laboratory workbenches, and one Go2 with the Z1 gripper model mounted on its trunk. In the default overview, Franka A is mounted at the midpoint of the upper outer edge of the source bench and Franka B at the midpoint of the lower outer edge of the destination bench. Both material flows run left to right: Franka A moves the payload from the yellow source pad to the green Go2 handoff, while Franka B moves it from the green Go2 handoff to the red installation fixture. Each arm crosses its base-joint centerline during this side-to-side transfer. Controller target sites are retained internally but hidden in the finished view; they have no collision geometry.
+```powershell
+lmrbtp mujoco --scenario examples/three_robot_packaging_delivery.json
+```
 
-The two Go2 dock centers are `3.00 m` apart, compared with `1.20 m` in the earlier compact layout. Both green handoff pads align directly with the right-side travel route, and the benches leave a clear aisle between them. Z1 retains the payload in its closed grasp for the entire route and releases it only on the green destination pad. The Go2 uses the `0.54 m` table-offset reference, and its free-joint pose is initialized once and never written during execution, so measured displacement comes from leg torques, inertia, and floor contact. The dynamic payload is moved through actuator-driven differential IK, grasp constraints, and a 12-motor alternating contact gait. Arm-link gravity compensation is enabled, as in the `mjctrl` example; the Go2 and payload remain under full gravity.
+Run an LLM-generated packing BT by supplying both matching files:
+
+```powershell
+lmrbtp mujoco `
+  --scenario examples/three_robot_packaging_delivery.json `
+  --bt "C:\path\to\behavior_tree.json"
+```
+
+The command statically validates the BT first, composes one MuJoCo world, settles all three robots, and then ticks the exact hierarchical trees concurrently. It prints condition/action/resource progress and writes `physical_execution_report.json` under `outputs/mujoco/`. An unrecovered failure returns a nonzero exit code and identifies the robot, node, failed measured predicate, controller stage, or timeout; recovered Action failures remain visible in the successful report.
+
+The adapter deliberately supports only `three_robot_courier` and `three_robot_packaging_delivery`; it rejects any other task rather than silently mapping it to a known scene. It executes `Sequence` and `Fallback` control flow hierarchically. A generated tree that uses an unsupported physical composite or action can still pass symbolic checks, but MuJoCo rejects it with the exact unsupported node instead of flattening or rewriting it.
+
+Both scenes contain two independently prefixed 7-DoF Panda models and one Go2 with the Z1 gripper model mounted on its trunk. The courier retains its two separated workbenches. The packing scene instead uses one shared assembly bench, opposed Panda mounting positions with collision-safe home poses, a separate room boundary and delivery pedestal, and a travel aisle through the doorway. Controller target sites are hidden and have no collision geometry.
+
+The Go2 free-joint pose is initialized once and never written during execution, so measured displacement comes from leg torques, inertia, and floor contact. Z1 retains the payload in its closed grasp throughout each route and releases it only at the declared destination. Dynamic objects move through actuator-driven differential IK, grasp constraints, and a 12-motor alternating contact gait. Arm-link gravity compensation is enabled, as in the `mjctrl` example; the Go2, package parts, door, and other dynamic bodies remain under full gravity.
 
 The grasp model is explicit: each tabletop Panda follows pose-aware IK with a constrained vertical gripper orientation so its fingers approach from above. Z1 first reaches its measured open joint position, follows pose-aware IK to a side-grasp pose, and closes at a rate-limited command. The grasp is accepted only when the measured joint reaches its contact angle and MuJoCo reports payload contact on both dedicated opposing finger-pad geoms. A soft weld is then activated at the current relative pose to prevent numerical slippage without snapping or teleporting the payload. Navigation fails if that measured grasp constraint is lost. At the destination, Z1 opens to its measured joint limit before releasing the constraint and retreating. Final fixture installation uses the same visible constraint mechanism. This is a controlled-simulation approximation, not a claim that fingertip friction, perception, or grasp uncertainty has been validated.
 
-After either Panda places the payload, it retreats and returns to its home joint configuration before its BT action succeeds and the shared exchange-zone resource is released. This prevents the next robot from entering while a Franka remains extended over the handoff area.
+After either Panda completes its collaborative step, it retreats and returns to its home joint configuration before its BT action succeeds and the shared zone is released. This prevents the next robot from entering while a Franka remains extended over the work area.
+
+### What the packing and room-delivery mission demonstrates
+
+The second scenario uses four independently enforced resources (`packing_zone`, `lid_supply_zone`, `doorway_zone`, and `delivery_zone`) and three concurrent robot trees. Franka A moves a loaded package base to the shared packing station while Franka B independently retrieves a separate dynamic lid. Franka B waits for the measured base placement, acquires the shared station, fits the lid with actuator-driven motion, activates the visible seal constraint at the reached pose, returns home, and only then releases the station. Go2 waits for both the base and the measured seal before it can enter.
+
+The room boundary is physical geometry and the door is an initially closed, collidable hinged body. The closed-door BT branch succeeds only after Go2 pushes the panel through contact, the measured hinge angle exceeds `0.70 rad`, and the dynamically controlled base reaches the far side while retaining both the Z1 grasp and the package seal. An alternate BT branch handles a door that is already physically open. Go2 then follows the room-side route, places the sealed parcel on the delivery station, opens the gripper, and stows Z1.
+
+`physical_execution_report.json` records the initial door state, final hinge angle, seal-constraint state, parcel and lid positions, delivery evidence, measured goals, action events, and resource release. The deterministic contract simulator still checks declared nominal effects only. MuJoCo does not copy those effects into the world: every physical Action succeeds or fails from controller motion, contacts, constraints, measured poses, and timeouts in this fixed scene.
 
 Robot MJCF files are fetched from MuJoCo Menagerie at the pinned commit recorded in [third-party notices](THIRD_PARTY_NOTICES.md). The arm controller adapts the damped differential-IK structure demonstrated by `mjctrl`. The native Go2 controller adapts the alternating contact-gait and joint-torque structure from `go2-convex-mpc`; it is not the upstream Pinocchio/CasADi convex-MPC solver. The upstream solver assumes Python 3.10 and a standalone bare-Go2 state layout, while this program controls the combined Go2/Z1 model directly through MuJoCo state.
 
@@ -224,7 +263,7 @@ The planner genuinely verifies the declared symbolic contract:
 - wait/resource cycles, timeouts, leaks, and cancellation cleanup;
 - symbolic state invariants and final goals.
 
-The separate MuJoCo adapter additionally tests the first courier BT against one fixed dynamic scene: actuator limits, gravity, contacts, reachable Cartesian motion, payload transfer, base stability, docking, and contact-driven Go2 displacement. Its report is evidence for that exact model, controller configuration, and initial state only. It does **not** establish general collision avoidance, perception accuracy, ROS 2 integration, sim-to-real validity, or physical-robot safety. XML remains an export format rather than a hardware controller.
+The separate MuJoCo adapter tests the two bundled BTs against fixed dynamic scenes: hierarchical branch selection, actuator limits, gravity, contacts, reachable Cartesian motion, collaborative assembly, payload transfer, base stability, docking, contact-driven Go2 displacement, hinged-door opening, and room delivery. Its report is evidence for that exact model, controller configuration, and initial state only. It does **not** establish general collision avoidance, perception accuracy, ROS 2 integration, sim-to-real validity, or physical-robot safety. XML remains an export format rather than a hardware controller.
 
 ## Development checks
 

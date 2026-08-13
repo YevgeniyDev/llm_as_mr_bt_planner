@@ -21,14 +21,30 @@ from .world import CourierWorld
 
 SUPPORTED_ROBOTS = {"franka_a", "unitree_go2_z1", "franka_b"}
 SUPPORTED_ACTIONS = {
-    "pick_source",
-    "place_source_cradle",
-    "pick_source_cradle",
-    "navigate_destination",
-    "place_destination_cradle",
-    "stow_arm_destination",
-    "pick_destination_cradle",
-    "install_target",
+    "three_robot_courier": {
+        "pick_source",
+        "place_source_cradle",
+        "pick_source_cradle",
+        "navigate_destination",
+        "place_destination_cradle",
+        "stow_arm_destination",
+        "pick_destination_cradle",
+        "install_target",
+    },
+    "three_robot_packaging_delivery": {
+        "pick_loaded_package_base",
+        "place_base_at_packing_station",
+        "pick_package_lid",
+        "fit_and_seal_package_lid",
+        "verify_delivery_readiness",
+        "pick_sealed_parcel",
+        "approach_closed_room_door",
+        "push_open_door_and_cross",
+        "cross_already_open_door",
+        "navigate_delivery_room",
+        "place_parcel_at_delivery_station",
+        "stow_after_delivery",
+    },
 }
 
 
@@ -41,15 +57,24 @@ def run_cli(args: Namespace) -> int:
         raise ValueError("--max-seconds must be greater than zero.")
 
     scenario = load_scenario(args.scenario, strict=True)
-    plan = load_plan_file(args.bt)
+    bt_path = Path(args.bt) if args.bt else Path(args.scenario).with_suffix(".bt.json")
+    if not bt_path.is_file():
+        raise ValueError(
+            f"No default BT exists beside the selected scenario ({bt_path}). "
+            "Pass --bt with an LLM-generated behavior_tree.json file."
+        )
+    plan = load_plan_file(bt_path)
     validation = validate_plan(plan, scenario, suggest_producers=True)
     if not validation.valid:
         first = "; ".join(error.message for error in validation.errors[:4])
         raise ValueError(f"The BT failed static validation and cannot enter MuJoCo: {first}")
     _check_adapter_scope(scenario, plan)
 
-    print("Building one MuJoCo model: Panda A + Go2/Z1 + Panda B + dynamic payload.")
-    world = CourierWorld.build(assets)
+    print(
+        f"Building one MuJoCo model for {scenario.task_id}: "
+        "Panda A + Go2/Z1 + Panda B + dynamic task objects."
+    )
+    world = CourierWorld.build(assets, task_id=scenario.task_id)
     arms = build_arm_controllers(world)
     gait = ContactGaitController(world)
     executor = PhysicalExecutor(world, scenario, plan, arms, gait, progress=print)
@@ -64,19 +89,22 @@ def run_cli(args: Namespace) -> int:
     if not gait.upright():
         raise RuntimeError("Go2 did not settle upright in the composed scene; physical BT execution was not started.")
 
-    print("Executing the exact BT leaves; symbolic effects are not applied in this process.")
+    print(
+        "Ticking the exact hierarchical BT against measured physics and explicit verified signals; "
+        "capability effects are not blindly applied."
+    )
     if args.headless:
         report = _loop(executor, max_seconds=args.max_seconds)
     else:
         report = _viewer_loop(executor, max_seconds=args.max_seconds, realtime_factor=args.realtime_factor)
 
-    output_dir = _new_output_directory(Path(args.output))
+    output_dir = _new_output_directory(Path(args.output), scenario.task_id)
     report_path = output_dir / "physical_execution_report.json"
     save_json(
         report_path,
         {
             "scenario": str(Path(args.scenario).resolve()),
-            "behavior_tree": str(Path(args.bt).resolve()),
+            "behavior_tree": str(bt_path.resolve()),
             "asset_source": "google-deepmind/mujoco_menagerie",
             "asset_commit": MENAGERIE_COMMIT,
             **report.to_dict(),
@@ -145,24 +173,26 @@ def _configure_free_camera(model: mujoco.MjModel, camera: mujoco.MjvCamera) -> N
 
 
 def _check_adapter_scope(scenario, plan) -> None:
-    if scenario.task_id != "three_robot_courier" or set(plan.behavior_trees) != SUPPORTED_ROBOTS:
+    supported = SUPPORTED_ACTIONS.get(scenario.task_id)
+    if supported is None or set(plan.behavior_trees) != SUPPORTED_ROBOTS:
         raise ValueError(
-            "The physical adapter currently supports only task_id 'three_robot_courier' with robots "
-            "franka_a, unitree_go2_z1, and franka_b. It does not silently reinterpret other scenarios."
+            "The physical adapter supports task_id 'three_robot_courier' and "
+            "'three_robot_packaging_delivery' with robots franka_a, unitree_go2_z1, "
+            "and franka_b. It does not silently reinterpret other scenarios."
         )
     for robot, root in plan.behavior_trees.items():
         for node in iter_nodes(root):
-            if node.children and node.type != "Sequence":
+            if node.children and node.type not in {"Sequence", "Fallback"}:
                 raise ValueError(
-                    f"The first physical adapter supports sequential trees only; {robot}/{node.node_id} "
-                    f"uses {node.type}. Symbolic validation remains available for that BT."
+                    f"The physical adapter supports Sequence and Fallback composites; "
+                    f"{robot}/{node.node_id} uses {node.type}. Symbolic validation remains available for that BT."
                 )
-            if node.type == "Action" and node.name not in SUPPORTED_ACTIONS:
+            if node.type == "Action" and node.name not in supported:
                 raise ValueError(f"No physical controller mapping exists for {robot}/{node.name}.")
 
 
-def _new_output_directory(root: Path) -> Path:
+def _new_output_directory(root: Path, task_id: str) -> Path:
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
-    directory = root.resolve() / f"three-robot-courier-{stamp}"
+    directory = root.resolve() / f"{task_id.replace('_', '-')}-{stamp}"
     directory.mkdir(parents=True, exist_ok=False)
     return directory
