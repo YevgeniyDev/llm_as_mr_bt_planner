@@ -225,6 +225,36 @@ lmrbtp mujoco `
   --bt "C:\path\to\behavior_tree.json"
 ```
 
+### Record publication-quality simulation videos
+
+Record the complete courier simulation, including the initial one-second gravity/contact settling phase:
+
+```powershell
+lmrbtp mujoco `
+  --headless `
+  --record-video `
+  --scenario examples/three_robot_courier.json `
+  --bt examples/three_robot_courier.bt.json `
+  --output outputs/paper-complementary
+```
+
+Record the collaborative packaging and closed-door delivery simulation:
+
+```powershell
+lmrbtp mujoco `
+  --headless `
+  --record-video `
+  --scenario examples/three_robot_packaging_delivery.json `
+  --bt examples/three_robot_packaging_delivery.bt.json `
+  --output outputs/paper-complementary
+```
+
+The publication defaults are deterministic action-directed camera cuts, 1920x1080 resolution, 30 frames per simulated second, H.264 encoding at CRF 18 with the `medium` preset, and `yuv420p` output. The courier cuts from its overview to source-workcell, route, and destination-workcell views as the corresponding physical actions begin. The packaging mission similarly follows assembly, door crossing, room route, and final delivery. All angles are fixed MuJoCo cameras, so identical executions produce identical cuts without introducing tracking-camera jitter. Pass `--video-camera NAME` to disable automatic cuts and lock the whole recording to one named camera; `--video-fps`, `--video-width`, and `--video-height` remain available for capture overrides. These options require `--record-video`. `--realtime-factor` changes viewer pacing only and never changes recorded playback speed.
+
+Each timestamped recording directory contains `simulation.mp4`, exact copies of `scenario.json` and `behavior_tree.json`, `physical_execution_report.json`, and `recording_manifest.json`. The manifest records the camera mode, cameras used, every cut's zero-based frame index, simulation timestamp and triggering action, encoder settings, frame count, simulated duration, MuJoCo and source revisions, and SHA-256 checksums. Frames are streamed to the encoder rather than retained in memory. An interrupted encoder leaves `simulation.partial.mp4` and does not publish a final manifest, while a normal BT failure still produces a playable video and failure report for diagnosis.
+
+On a displayless Linux host, select an off-screen OpenGL backend before importing MuJoCo, for example `MUJOCO_GL=egl` with a supported GPU or `MUJOCO_GL=osmesa` for software rendering.
+
 The command statically validates the BT first, composes one MuJoCo world, settles all three robots, and then ticks the exact hierarchical trees concurrently. It prints condition/action/resource progress and writes `physical_execution_report.json` under `outputs/mujoco/`. An unrecovered failure returns a nonzero exit code and identifies the robot, node, failed measured predicate, controller stage, or timeout; recovered Action failures remain visible in the successful report.
 
 The adapter deliberately supports only `three_robot_courier` and `three_robot_packaging_delivery`; it rejects any other task rather than silently mapping it to a known scene. It executes `Sequence` and `Fallback` control flow hierarchically. A generated tree that uses an unsupported physical composite or action can still pass symbolic checks, but MuJoCo rejects it with the exact unsupported node instead of flattening or rewriting it.

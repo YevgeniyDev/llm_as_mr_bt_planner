@@ -28,7 +28,9 @@ DEFAULT_TEMPLATE = PROJECT_ROOT / "templates" / "three_robot_scenario.template.j
 def main(argv: list[str] | None = None) -> int:
     load_dotenv()
     parser = _build_parser()
-    args = parser.parse_args(argv)
+    command_argv = list(sys.argv[1:] if argv is None else argv)
+    args = parser.parse_args(command_argv)
+    args.invocation = [parser.prog, *command_argv]
     try:
         return int(args.func(args))
     except Exception as error:
@@ -109,6 +111,37 @@ def _build_parser() -> argparse.ArgumentParser:
         type=float,
         default=1.0,
         help="Viewer playback speed; ignored in headless mode.",
+    )
+    physical.add_argument(
+        "--record-video",
+        action="store_true",
+        help="Record the complete simulation, including settling, to simulation.mp4.",
+    )
+    physical.add_argument(
+        "--video-fps",
+        type=int,
+        default=None,
+        help="Recorded frames per simulated second (default when recording: 30).",
+    )
+    physical.add_argument(
+        "--video-width",
+        type=int,
+        default=None,
+        help="Recorded frame width (default when recording: 1920).",
+    )
+    physical.add_argument(
+        "--video-height",
+        type=int,
+        default=None,
+        help="Recorded frame height (default when recording: 1080).",
+    )
+    physical.add_argument(
+        "--video-camera",
+        default=None,
+        help=(
+            "Force one named camera and disable automatic action-directed cuts "
+            "(default: mission-specific multi-angle direction)."
+        ),
     )
     physical.set_defaults(func=_cmd_mujoco)
     return parser
@@ -247,7 +280,7 @@ def _cmd_mujoco(args: argparse.Namespace) -> int:
     try:
         from .mujoco_sim.runner import run_cli
     except ImportError as error:
-        if error.name in {"mujoco", "numpy"}:
+        if error.name in {"mujoco", "numpy", "imageio", "imageio_ffmpeg"}:
             raise RuntimeError(
                 "MuJoCo simulation dependencies are missing. Install them with "
                 "python -m pip install -e \".[mujoco]\"."

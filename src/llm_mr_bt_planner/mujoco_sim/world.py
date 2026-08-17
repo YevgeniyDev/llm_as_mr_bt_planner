@@ -76,7 +76,7 @@ _ARENA_XML = """
 <mujoco model="three_robot_team">
   <compiler angle="radian" autolimits="true"/>
   <option timestep="0.002" integrator="implicitfast" cone="elliptic" impratio="100"/>
-  <visual><global azimuth="135" elevation="-24"/></visual>
+  <visual><global azimuth="135" elevation="-24" offwidth="1920" offheight="1080"/></visual>
   <asset>
     <texture type="skybox" builtin="gradient" rgb1="0.3 0.45 0.65" rgb2="0.02 0.03 0.05" width="512" height="3072"/>
     <texture name="floor_tex" type="2d" builtin="checker" rgb1="0.18 0.20 0.23" rgb2="0.10 0.11 0.13" width="512" height="512"/>
@@ -88,6 +88,14 @@ _ARENA_XML = """
     <geom name="floor" type="plane" size="4 3 0.1" material="floor_mat"
           friction="1.0 0.02 0.005" condim="6"/>
     <camera name="overview" pos="5.5 -0.20 3.2" xyaxes="0 1 0 -0.55 0 0.835"/>
+    <camera name="packaging_recording" pos="1.5 -4.5 2.9" xyaxes="1 0 0 0 0.48 0.88"/>
+    <camera name="courier_source" pos="0 -3.2 2.1" xyaxes="1 0 0 0 0.342 0.940" fovy="38"/>
+    <camera name="courier_route" pos="1.5 4.5 3.2" xyaxes="-1 0 0 0 -0.500 0.866" fovy="42"/>
+    <camera name="courier_destination" pos="3 -3.2 2.1" xyaxes="1 0 0 0 0.342 0.940" fovy="38"/>
+    <camera name="packaging_assembly" pos="0 -3.2 2.1" xyaxes="1 0 0 0 0.342 0.940" fovy="38"/>
+    <camera name="packaging_door" pos="0.8 3.5 2.2" xyaxes="-1 0 0 0 -0.400 0.916" fovy="38"/>
+    <camera name="packaging_route" pos="2.3 3.5 2.2" xyaxes="-1 0 0 0 -0.400 0.916" fovy="38"/>
+    <camera name="packaging_delivery" pos="3 -3.2 2.1" xyaxes="1 0 0 0 0.342 0.940" fovy="38"/>
   </worldbody>
 </mujoco>
 """

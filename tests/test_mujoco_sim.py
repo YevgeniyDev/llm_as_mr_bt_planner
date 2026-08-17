@@ -193,6 +193,26 @@ def test_viewer_camera_is_free_and_starts_with_an_overview():
     assert camera.elevation == pytest.approx(-35.0)
 
 
+def test_composed_world_supports_publication_recording_settings(menagerie_assets: Path):
+    recording_cameras = {
+        "overview",
+        "packaging_recording",
+        "courier_source",
+        "courier_route",
+        "courier_destination",
+        "packaging_assembly",
+        "packaging_door",
+        "packaging_route",
+        "packaging_delivery",
+    }
+    for task_id in ("three_robot_courier", "three_robot_packaging_delivery"):
+        world = CourierWorld.build(menagerie_assets, task_id=task_id)
+
+        assert all(world.model.camera(name).id >= 0 for name in recording_cameras)
+        assert world.model.vis.global_.offwidth >= 1920
+        assert world.model.vis.global_.offheight >= 1080
+
+
 def test_z1_gripper_uses_measured_open_and_closed_joint_positions(menagerie_assets: Path):
     world = CourierWorld.build(menagerie_assets)
     arms = build_arm_controllers(world)

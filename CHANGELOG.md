@@ -6,6 +6,8 @@ All notable changes to the project are recorded here.
 
 ### Added
 
+- Added deterministic MuJoCo video recording with simulation-time frame scheduling, action-directed cuts between fixed mission cameras, a single-camera override, 1080p H.264 output, streaming encoding, safe partial-file handling, and CLI capture controls.
+- Added portable physical-run evidence bundles containing the MP4, exact scenario and BT inputs, the measured execution report, software/model provenance, and SHA-256 checksums.
 - Replaced the old inspection/adaptive mission with `three_robot_packaging_delivery`, a complete generation scenario in which two Panda arms collaboratively assemble a sealed parcel and Go2/Z1 delivers it into another room through an initially closed door.
 - Added a complete schema-v2 reference BT with three cross-robot waits, four exclusive resources, concurrent three-robot execution, and a physically selected closed-door/already-open `Fallback`.
 - Added the packing scenario to the UI as the default bundled choice while retaining the courier as a one-click alternative. The LLM generation service receives the selected scenario normally; no reference BT is injected into generation.

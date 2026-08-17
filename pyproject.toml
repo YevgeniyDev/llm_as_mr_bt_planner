@@ -16,7 +16,13 @@ dependencies = ["jsonschema>=4.23,<5"]
 [project.optional-dependencies]
 dev = ["pytest>=8", "ruff>=0.4", "mypy>=1.8"]
 ui = ["gradio>=5,<7", "keyring>=25,<27"]
-mujoco = ["mujoco>=3.3,<4", "numpy>=1.26,<3", "scipy>=1.11,<2"]
+mujoco = [
+    "mujoco>=3.3,<4",
+    "numpy>=1.26,<3",
+    "scipy>=1.11,<2",
+    "imageio>=2.34,<3",
+    "imageio-ffmpeg>=0.5,<1",
+]
 
 [project.scripts]
 lmrbtp = "llm_mr_bt_planner.cli:main"
