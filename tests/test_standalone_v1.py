@@ -356,7 +356,14 @@ def test_gpt5_request_omits_unsupported_temperature(monkeypatch):
 
         @staticmethod
         def read() -> bytes:
-            return json.dumps({"choices": [{"message": {"content": "{}"}}]}).encode()
+            return json.dumps(
+                {
+                    "id": "chatcmpl_test",
+                    "model": "gpt-5.6-sol-2026-08-01",
+                    "usage": {"prompt_tokens": 10, "completion_tokens": 20},
+                    "choices": [{"message": {"content": "{}"}}],
+                }
+            ).encode()
 
     def urlopen(request, timeout):  # noqa: ARG001
         requests.append(json.loads(request.data))
@@ -367,6 +374,12 @@ def test_gpt5_request_omits_unsupported_temperature(monkeypatch):
 
     assert client.complete("system", "user") == "{}"
     assert client.temperature is None
+    assert client.response_metadata[0]["response_id"] == "chatcmpl_test"
+    assert client.response_metadata[0]["model_returned"] == "gpt-5.6-sol-2026-08-01"
+    assert client.response_metadata[0]["usage"] == {
+        "prompt_tokens": 10,
+        "completion_tokens": 20,
+    }
     assert requests == [
         {
             "model": "gpt-5.6-sol",

@@ -205,6 +205,10 @@ class PhysicalExecutor:
                 "go2_and_payload_gravity_enabled": True,
                 "transport_mode": "payload retained in the Z1 grasp during Go2 locomotion",
                 "resources_released": resources_released,
+                "object_positions_m": {
+                    name: self.world.object_position(name).round(6).tolist()
+                    for name in self.world.object_body_ids
+                },
                 "packaging_delivery_evidence": {
                     "package_base_position_m": self.world.object_position("payload")
                     .round(6)
@@ -253,13 +257,27 @@ class PhysicalExecutor:
         if name == "gripper_empty":
             return not self.world.robot_holding_any(parameters[0])
         if name == "installed":
-            fixture = parameters[1]
-            return self.world.equality_active(fixture) and self._payload_near(fixture, 0.08)
-        if name == "at" and parameters[0] in {self.part_id, "package_lid"}:
+            object_id, fixture = parameters
+            lock = self._fixture_key(fixture, object_id)
+            return (
+                lock is not None
+                and self.world.equality_active(lock)
+                and self._object_near(object_id, fixture, 0.08)
+            )
+        if name == "installed_component" and len(parameters) == 1:
+            fixture = parameters[0]
+            return any(
+                self.observe_literal(f"installed({object_id},{fixture})")
+                for object_id in self.world.object_body_ids
+                if object_id != "package_lid"
+            )
+        if name == "at" and self._object_name(parameters[0]) in self.world.object_body_ids:
             object_id, location = parameters
             if self._object_held(object_id):
                 return False
             return self._object_near(object_id, location, 0.085)
+        if name == "usable" and len(parameters) == 1:
+            return self._has_signal(literal)
         if name in {"package_sealed", "attached"}:
             return (
                 self.scenario.task_id == "three_robot_packaging_delivery"
@@ -532,26 +550,36 @@ class PhysicalExecutor:
         self.signals.discard(canonical_predicate(literal))
 
     def _object_name(self, object_id: str) -> str:
+        if object_id in self.world.object_body_ids:
+            return object_id
         return "package_lid" if object_id == "package_lid" else "payload"
 
     def _grip_key(self, robot: str, object_id: str) -> str | None:
-        if object_id == "package_lid":
-            key = f"{robot}:package_lid"
-            return key if key in self.world.grip_equalities else None
+        key = f"{robot}:{self._object_name(object_id)}"
+        if key in self.world.grip_equalities:
+            return key
         return robot if robot in self.world.grip_equalities else None
 
     def _object_held(self, object_id: str) -> bool:
-        if object_id == "package_lid":
-            return any(
-                self.world.equality_active(key)
-                for key in self.world.grip_equalities
-                if key.endswith(":package_lid")
-            )
+        object_name = self._object_name(object_id)
+        object_keys = [
+            key
+            for key in self.world.grip_equalities
+            if key.endswith(f":{object_name}") and not key.startswith("target_fixture:")
+        ]
+        if object_keys:
+            return any(self.world.equality_active(key) for key in object_keys)
         return any(
             self.world.equality_active(robot)
             for robot in self.arms
             if robot in self.world.grip_equalities
         )
+
+    def _fixture_key(self, fixture: str, object_id: str) -> str | None:
+        object_key = f"{fixture}:{self._object_name(object_id)}"
+        if object_key in self.world.grip_equalities:
+            return object_key
+        return fixture if fixture in self.world.grip_equalities else None
 
     def _object_near(self, object_id: str, location: str, tolerance: float) -> bool:
         return bool(
@@ -596,7 +624,7 @@ class PhysicalExecutor:
 
 
 class PhysicalAction:
-    """Controller-backed action leaf for the two supported physical missions."""
+    """Controller-backed action leaf for the supported physical missions."""
 
     def __init__(
         self,
@@ -618,7 +646,7 @@ class PhysicalAction:
         self.object_id = "package_lid" if name in {
             "pick_package_lid",
             "fit_and_seal_package_lid",
-        } else executor.part_id
+        } else parameters[0] if parameters else executor.part_id
         self.object_name = executor._object_name(self.object_id)
 
     @property
@@ -639,6 +667,8 @@ class PhysicalAction:
             "pick_package_lid": "lid_supply",
             "pick_sealed_parcel": "packing_station",
         }
+        if self.name == "pick_source_part":
+            return self._pick(self.parameters[1], dt)
         if self.name in pick_locations:
             return self._pick(pick_locations[self.name], dt)
 
@@ -733,9 +763,9 @@ class PhysicalAction:
             distance = float(np.linalg.norm(self.arm.tool_position - object_position))
             object_drift = float(np.linalg.norm(object_position - grasp_target))
             contact = self.world.object_contact_with(self.object_name, self.arm.body_prefix)
-            z1_pinch = self.world.payload_contact_with_z1_finger_pad(
-                "fixed"
-            ) and self.world.payload_contact_with_z1_finger_pad("moving")
+            z1_pinch = self.world.object_contact_with_z1_finger_pad(
+                self.object_name, "fixed"
+            ) and self.world.object_contact_with_z1_finger_pad(self.object_name, "moving")
             proximity_limit = 0.060 if self.robot == "unitree_go2_z1" else 0.032
             if (
                 self._elapsed() > 0.35
@@ -818,7 +848,16 @@ class PhysicalAction:
             if float(np.linalg.norm(object_error)) < 0.035:
                 self.world.set_cradle_holding_friction(location, enabled=True)
                 if lock:
-                    self.world.activate_weld(lock)
+                    resolved_lock = (
+                        lock
+                        if lock == "package_seal"
+                        else self.executor._fixture_key(lock, self.object_id)
+                    )
+                    if resolved_lock is None:
+                        return "FAILURE", (
+                            f"no physical fixture constraint maps {self.object_id} to {lock}"
+                        )
+                    self.world.activate_weld(resolved_lock)
                 if self.robot != "unitree_go2_z1":
                     self.world.deactivate_weld(self.grip_key)
                 self.arm.set_gripper(closed=False)
@@ -879,7 +918,7 @@ class PhysicalAction:
             )
         if lock is not None:
             return self.executor.observe_literal(
-                f"installed({self.executor.part_id},{lock})"
+                f"installed({self.object_id},{lock})"
             )
         return self.executor.observe_literal(f"at({self.object_id},{location})")
 
@@ -903,7 +942,7 @@ class PhysicalAction:
     def _navigate(self, dt: float) -> tuple[str, str]:
         assert self.arm is not None
         self.executor.used_arms.add(self.robot)
-        if not self.world.equality_active("unitree_go2_z1"):
+        if not self.world.equality_active(self.grip_key):
             return "FAILURE", "the parcel left the Z1 grasp before or during locomotion"
         if self.scenario_is_packaging and not self.world.equality_active("package_seal"):
             return "FAILURE", "the package seal constraint opened before or during locomotion"
@@ -941,6 +980,17 @@ class PhysicalAction:
                 if self.name == "push_open_door_and_cross" and not self.world.door_open():
                     return "FAILURE", (
                         "Go2 reached the far side, but the measured hinge angle did not prove the door opened"
+                    )
+                required_dock = {
+                    "navigate_destination": "destination_dock",
+                    "navigate_delivery_room": "destination_dock",
+                }.get(self.name)
+                if required_dock is not None and not self.executor.observe_literal(
+                    f"docked({self.robot},{required_dock})"
+                ):
+                    return "RUNNING", (
+                        f"settling at {required_dock} until position and base velocities "
+                        "satisfy the measured docking predicate"
                     )
                 payload_evidence = (
                     "the sealed parcel remained in the Z1 grasp"

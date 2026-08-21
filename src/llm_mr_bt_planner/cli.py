@@ -22,6 +22,12 @@ from .xml_export import export_behaviortree_cpp_xml
 
 DEFAULT_SCENARIO = PROJECT_ROOT / "examples" / "three_robot_courier.json"
 PACKAGING_SCENARIO = PROJECT_ROOT / "examples" / "three_robot_packaging_delivery.json"
+RECOVERY_SCENARIO = PROJECT_ROOT / "examples" / "three_robot_spare_part_recovery.json"
+RECOVERY_BT = PROJECT_ROOT / "examples" / "three_robot_spare_part_recovery.bt.json"
+RECOVERY_FAULT = PROJECT_ROOT / "examples" / "three_robot_spare_part_recovery.fault.json"
+RECOVERY_ORACLE_BT = (
+    PROJECT_ROOT / "examples" / "three_robot_spare_part_recovery.expected_recovery.bt.json"
+)
 DEFAULT_TEMPLATE = PROJECT_ROOT / "templates" / "three_robot_scenario.template.json"
 
 
@@ -144,6 +150,90 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     physical.set_defaults(func=_cmd_mujoco)
+
+    recovery = sub.add_parser(
+        "recovery-experiment",
+        help=(
+            "Record a fault-only control and same-simulation LLM-adapted MuJoCo recovery trial."
+        ),
+    )
+    recovery.add_argument("--scenario", default=str(RECOVERY_SCENARIO))
+    recovery.add_argument("--bt", default=str(RECOVERY_BT), help="Nominal pre-failure BT JSON.")
+    recovery.add_argument("--fault", default=str(RECOVERY_FAULT))
+    recovery.add_argument("--assets-dir", default=None)
+    recovery.add_argument("--output", default=str(PROJECT_ROOT / "outputs" / "recovery"))
+    recovery.add_argument("--planner", choices=["openai", "oracle"], default="openai")
+    recovery.add_argument("--model", default="gpt-5.6-sol")
+    recovery.add_argument(
+        "--reasoning-effort",
+        choices=["low", "medium", "high", "xhigh", "max"],
+        default="high",
+    )
+    recovery.add_argument(
+        "--oracle-bt",
+        default=str(RECOVERY_ORACLE_BT),
+        help="Offline test fixture used only with --planner oracle; never presented as LLM evidence.",
+    )
+    recovery.add_argument("--max-corrections", type=int, default=2)
+    recovery.add_argument("--max-ticks", type=int, default=160)
+    recovery.add_argument("--max-seconds", type=float, default=160.0)
+    recovery.add_argument(
+        "--no-video",
+        action="store_true",
+        help="Run the integration experiment without encoding the three videos.",
+    )
+    recovery.add_argument("--video-fps", type=int, default=30)
+    recovery.add_argument("--video-width", type=int, default=1920)
+    recovery.add_argument("--video-height", type=int, default=1080)
+    recovery.set_defaults(func=_cmd_recovery_experiment)
+
+    adaptive = sub.add_parser(
+        "adaptive-demo",
+        help=(
+            "Generate a fault-blind BT with OpenAI, run MuJoCo, adapt after a runtime "
+            "failure, resume the same simulation, and record one directed video."
+        ),
+    )
+    adaptive.add_argument("--scenario", default=str(RECOVERY_SCENARIO))
+    adaptive.add_argument("--fault", default=str(RECOVERY_FAULT))
+    adaptive.add_argument("--assets-dir", default=None)
+    adaptive.add_argument("--output", default=str(PROJECT_ROOT / "outputs" / "adaptive_demo"))
+    adaptive.add_argument("--model", default="gpt-5.6-sol")
+    adaptive.add_argument(
+        "--reasoning-effort",
+        choices=["low", "medium", "high", "xhigh", "max"],
+        default="high",
+    )
+    adaptive.add_argument("--generation-max-corrections", type=int, default=4)
+    adaptive.add_argument("--recovery-max-corrections", type=int, default=2)
+    adaptive.add_argument("--max-ticks", type=int, default=160)
+    adaptive.add_argument("--max-seconds", type=float, default=160.0)
+    adaptive.add_argument(
+        "--headless",
+        action="store_true",
+        help="Run without opening the live MuJoCo viewer (video recording can still run).",
+    )
+    adaptive.add_argument(
+        "--realtime-factor",
+        type=float,
+        default=1.0,
+        help="Live viewer playback speed; recorded video remains simulation-time based.",
+    )
+    adaptive.add_argument(
+        "--heartbeat-seconds",
+        type=float,
+        default=5.0,
+        help="Print a still-working status at this interval during LLM calls.",
+    )
+    adaptive.add_argument(
+        "--no-video",
+        action="store_true",
+        help="Run the complete real-LLM integration without encoding adaptive_demo.mp4.",
+    )
+    adaptive.add_argument("--video-fps", type=int, default=30)
+    adaptive.add_argument("--video-width", type=int, default=1920)
+    adaptive.add_argument("--video-height", type=int, default=1080)
+    adaptive.set_defaults(func=_cmd_adaptive_demo)
     return parser
 
 
@@ -244,6 +334,7 @@ def _cmd_doctor(args: argparse.Namespace) -> int:  # noqa: ARG001
             PACKAGING_SCENARIO,
             PROJECT_ROOT / "examples" / "three_robot_packaging_delivery.bt.json",
         ),
+        ("recovery nominal", RECOVERY_SCENARIO, RECOVERY_BT),
     )
     for label, scenario_path, bt_path in references:
         try:
@@ -287,6 +378,34 @@ def _cmd_mujoco(args: argparse.Namespace) -> int:
             ) from error
         raise
     return run_cli(args)
+
+
+def _cmd_recovery_experiment(args: argparse.Namespace) -> int:
+    """Lazy import keeps the recovery command's MuJoCo stack optional."""
+    try:
+        from .mujoco_sim.recovery_runner import run_recovery_cli
+    except ImportError as error:
+        if error.name in {"mujoco", "numpy", "imageio", "imageio_ffmpeg"}:
+            raise RuntimeError(
+                "MuJoCo recording dependencies are missing. Install them with "
+                "python -m pip install -e \".[mujoco]\"."
+            ) from error
+        raise
+    return run_recovery_cli(args)
+
+
+def _cmd_adaptive_demo(args: argparse.Namespace) -> int:
+    """Lazy import keeps the unified adaptive demo's MuJoCo stack optional."""
+    try:
+        from .mujoco_sim.adaptive_demo_runner import run_adaptive_demo_cli
+    except ImportError as error:
+        if error.name in {"mujoco", "numpy", "imageio", "imageio_ffmpeg", "PIL"}:
+            raise RuntimeError(
+                "MuJoCo recording dependencies are missing. Install them with "
+                "python -m pip install -e \".[mujoco]\"."
+            ) from error
+        raise
+    return run_adaptive_demo_cli(args)
 
 
 def _provider_key(provider: str, use_saved: bool) -> str:

@@ -1,6 +1,6 @@
 # Multi-Robot Behavior Tree Planner
 
-This application uses OpenAI or Anthropic (Claude) to generate complete synchronized Behavior Trees for a heterogeneous three-robot team. It validates and symbolically simulates the model's exact trees, saves successful results as JSON and XML, and can execute the two bundled missions in a separate MuJoCo process.
+This application uses OpenAI or Anthropic (Claude) to generate complete synchronized Behavior Trees for a heterogeneous three-robot team. It validates and symbolically simulates the model's exact trees, saves successful results as JSON and XML, and can execute three bundled missions in a separate MuJoCo process.
 
 The demonstration team is:
 
@@ -56,6 +56,7 @@ The repository provides:
 
 - [Collaborative packing and room-delivery scenario](examples/three_robot_packaging_delivery.json) and its [committed reference BT](examples/three_robot_packaging_delivery.bt.json)
 - [Courier scenario](examples/three_robot_courier.json) and its [committed reference BT](examples/three_robot_courier.bt.json)
+- [Spare-part recovery scenario](examples/three_robot_spare_part_recovery.json), [nominal BT](examples/three_robot_spare_part_recovery.bt.json), [fault contract](examples/three_robot_spare_part_recovery.fault.json), and [offline recovery test oracle](examples/three_robot_spare_part_recovery.expected_recovery.bt.json)
 - [Blank template](templates/three_robot_scenario.template.json)
 - [JSON Schema](schemas/scenario.schema.json)
 
@@ -253,13 +254,94 @@ The publication defaults are deterministic action-directed camera cuts, 1920x108
 
 Each timestamped recording directory contains `simulation.mp4`, exact copies of `scenario.json` and `behavior_tree.json`, `physical_execution_report.json`, and `recording_manifest.json`. The manifest records the camera mode, cameras used, every cut's zero-based frame index, simulation timestamp and triggering action, encoder settings, frame count, simulated duration, MuJoCo and source revisions, and SHA-256 checksums. Frames are streamed to the encoder rather than retained in memory. An interrupted encoder leaves `simulation.partial.mp4` and does not publish a final manifest, while a normal BT failure still produces a playable video and failure report for diagnosis.
 
+### Run and record the unexpected-failure recovery experiment
+
+For the complete paper demonstration, set an OpenAI key and run one command:
+
+```powershell
+$env:OPENAI_API_KEY = "your-key"
+lmrbtp adaptive-demo --output outputs/paper-complementary/adaptive-demo
+```
+
+This command opens a live MuJoCo window automatically after nominal BT generation finishes.
+The window follows the same action-directed source, failure, route, and destination camera cuts
+as the recording, while still allowing normal mouse camera controls between cuts. During the
+OpenAI recovery call, physics remains frozen, the window stays responsive, and a native MuJoCo
+overlay shows `FAILURE DETECTED - BT ADAPTATION IN PROGRESS` with the elapsed wait time. Use
+`--realtime-factor 2` for 2x live playback. Use `--headless` only for a displayless machine or a
+batch run; headless mode can still produce `adaptive_demo.mp4`.
+
+`adaptive-demo` performs the whole workflow without accepting a prebuilt BT or an offline
+planner:
+
+1. It sends only the nominal scenario to `gpt-5.6-sol`, prints percentage progress and
+   five-second heartbeats, and accepts the generated BT only after static validation and
+   contract simulation. A semantic gate requires the nominal tree to use `primary_part` and
+   rejects any tree that mentions `spare_part`, including a preplanned fallback.
+2. Only after that BT is accepted does the process read the fault specification. It then
+   launches MuJoCo automatically with both the orange primary part and blue spare part visible,
+   while nominal actions use only the primary part.
+3. Panda A places and releases the primary part in `source_cradle`. The configured force is
+   applied after that measured successful placement and before Go2/Z1 grasps it, causing the
+   part to fall to the floor and the nominal pick to fail.
+4. The robots safely stop and the MuJoCo clock/state remain frozen. The measured failure
+   snapshot and failed nominal BT are sent to the LLM, with live correction/validation progress.
+   The final video inserts a dark `FAILURE DETECTED / LLM IS ADAPTING THE BEHAVIOR TREE`
+   status layer whose metadata records the real API wait time.
+5. Once the replacement BT passes validation, contract simulation, and spare-part checks, the
+   exact same `MjModel` and `MjData` resume without a reset. The robots retrieve the initially
+   visible spare, complete the handoff and installation, and the recorder switches among
+   overview, source/failure, route, and destination angles according to the active action.
+
+The timestamped output directory contains `adaptive_demo.mp4`, clear text and JSON event logs,
+the exact nominal prompts and generated BT, non-secret OpenAI response/model/token provenance,
+fault-blindness evidence, the measured failure snapshot, every recovery attempt, the accepted
+adapted BT and diff, validation/simulation reports, continuity hashes, physical events and final
+goals, recording/camera-cut metadata, and SHA-256 hashes. Use `--no-video` for a faster real-LLM
+integration check; it still performs both LLM calls and the physical run. Resolution, frame rate,
+reasoning effort, heartbeat interval, and both correction limits are explicit CLI options.
+
+For the older two-trial experimental layout (fault-only control, adaptive run, and side-by-side
+comparison), run:
+
+```powershell
+$env:OPENAI_API_KEY = "your-key"
+lmrbtp recovery-experiment --output outputs/paper-complementary/recovery
+```
+
+`recovery-experiment` starts from the committed nominal BT and uses the OpenAI Responses API
+with `gpt-5.6-sol`, high reasoning effort, and a strict JSON schema by default. It performs two
+independently initialized trials with the same deterministic scene and fault trigger:
+
+1. The fault-only control executes the valid nominal BT through Panda A's successful placement in `source_cradle`. After the part is measured in the handoff zone and released, but before Go2/Z1 establishes a grasp, a declared external force pushes `primary_part` from the cradle. The part falls to the floor, Go2's measured pick fails, and all robots enter a safe stopped/home state.
+2. The adaptive trial repeats the same fault. From its measured safe-stop snapshot, the LLM returns a complete continuation BT for all three robots. The candidate must pass static validation, use `spare_part` rather than the unavailable primary part, and reach all goals in contract simulation before physical execution resumes.
+
+The adaptive trial does not rebuild or reset MuJoCo after the fault. The same `MjModel`, `MjData`, controller instances, object poses, simulation clock, and reset counter continue through replanning and final spare-part installation. The report records state hashes immediately before and after the API call and verifies that the reset counter remains unchanged through completion. The LLM call consumes wall time but deliberately does not advance simulation time. Its adaptive video also includes the failure-handling status layer.
+
+Every run creates a timestamped evidence directory containing:
+
+- `failure_only.mp4` — nominal control through detected failure and safe stop;
+- `adaptive_recovery.mp4` — the same failure followed by the validated continuation, with source/floor/route/destination camera cuts;
+- `comparison_side_by_side.mp4` — aligned control and adaptive clips, labeled on-screen; the completed control side freezes while recovery continues;
+- exact scenario, nominal BT, and fault inputs;
+- the adapted BT, unified nominal/adapted diff, all LLM attempt provenance, static validation, and contract-simulation trace;
+- measured failure, object positions, action events, final goals, continuity evidence, SHA-256 file hashes, and software/model provenance.
+
+For an offline integration dry run, use the clearly labeled committed oracle:
+
+```powershell
+lmrbtp recovery-experiment --planner oracle --no-video
+```
+
+Oracle runs are marked `real_llm_evidence: false`, use an `ORACLE DRY-RUN RECOVERY` comparison label when video is enabled, and never support the paper's LLM-adaptation claim. Use the default `--planner openai` command for research evidence. `--model`, `--reasoning-effort`, `--max-corrections`, resolution, and frame-rate controls are explicit CLI options.
+
 On a displayless Linux host, select an off-screen OpenGL backend before importing MuJoCo, for example `MUJOCO_GL=egl` with a supported GPU or `MUJOCO_GL=osmesa` for software rendering.
 
 The command statically validates the BT first, composes one MuJoCo world, settles all three robots, and then ticks the exact hierarchical trees concurrently. It prints condition/action/resource progress and writes `physical_execution_report.json` under `outputs/mujoco/`. An unrecovered failure returns a nonzero exit code and identifies the robot, node, failed measured predicate, controller stage, or timeout; recovered Action failures remain visible in the successful report.
 
-The adapter deliberately supports only `three_robot_courier` and `three_robot_packaging_delivery`; it rejects any other task rather than silently mapping it to a known scene. It executes `Sequence` and `Fallback` control flow hierarchically. A generated tree that uses an unsupported physical composite or action can still pass symbolic checks, but MuJoCo rejects it with the exact unsupported node instead of flattening or rewriting it.
+The adapter deliberately supports only `three_robot_courier`, `three_robot_packaging_delivery`, and `three_robot_spare_part_recovery`; it rejects any other task rather than silently mapping it to a known scene. It executes `Sequence` and `Fallback` control flow hierarchically. A generated tree that uses an unsupported physical composite or action can still pass symbolic checks, but MuJoCo rejects it with the exact unsupported node instead of flattening or rewriting it.
 
-Both scenes contain two independently prefixed 7-DoF Panda models and one Go2 with the Z1 gripper model mounted on its trunk. The courier retains its two separated workbenches. The packing scene instead uses one shared assembly bench, opposed Panda mounting positions with collision-safe home poses, a separate room boundary and delivery pedestal, and a travel aisle through the doorway. Controller target sites are hidden and have no collision geometry.
+All three scenes contain two independently prefixed 7-DoF Panda models and one Go2 with the Z1 gripper model mounted on its trunk. The courier and recovery scenes use separated workbenches; recovery adds independent primary and spare free bodies plus object-specific grasp and fixture constraints. The packing scene instead uses one shared assembly bench, opposed Panda mounting positions with collision-safe home poses, a separate room boundary and delivery pedestal, and a travel aisle through the doorway. Controller target sites are hidden and have no collision geometry.
 
 The Go2 free-joint pose is initialized once and never written during execution, so measured displacement comes from leg torques, inertia, and floor contact. Z1 retains the payload in its closed grasp throughout each route and releases it only at the declared destination. Dynamic objects move through actuator-driven differential IK, grasp constraints, and a 12-motor alternating contact gait. Arm-link gravity compensation is enabled, as in the `mjctrl` example; the Go2, package parts, door, and other dynamic bodies remain under full gravity.
 
@@ -293,7 +375,7 @@ The planner genuinely verifies the declared symbolic contract:
 - wait/resource cycles, timeouts, leaks, and cancellation cleanup;
 - symbolic state invariants and final goals.
 
-The separate MuJoCo adapter tests the two bundled BTs against fixed dynamic scenes: hierarchical branch selection, actuator limits, gravity, contacts, reachable Cartesian motion, collaborative assembly, payload transfer, base stability, docking, contact-driven Go2 displacement, hinged-door opening, and room delivery. Its report is evidence for that exact model, controller configuration, and initial state only. It does **not** establish general collision avoidance, perception accuracy, ROS 2 integration, sim-to-real validity, or physical-robot safety. XML remains an export format rather than a hardware controller.
+The separate MuJoCo adapter tests the three bundled BTs against fixed dynamic scenes: hierarchical branch selection, actuator limits, gravity, contacts, reachable Cartesian motion, collaborative assembly, payload transfer, base stability, docking, contact-driven Go2 displacement, hinged-door opening, room delivery, deterministic part loss, and same-state spare-part recovery. Its report is evidence for that exact model, controller configuration, fault contract, and initial state only. It does **not** establish general collision avoidance, perception accuracy, diagnosis from real sensors, ROS 2 integration, sim-to-real validity, or physical-robot safety. XML remains an export format rather than a hardware controller.
 
 ## Development checks
 
@@ -304,6 +386,8 @@ python -m mypy src/llm_mr_bt_planner
 python -m pytest -q
 $env:LMRBTP_RUN_MUJOCO_E2E = "1"
 python -m pytest tests/test_mujoco_sim.py -q
+$env:LMRBTP_RUN_MUJOCO_RECOVERY_E2E = "1"
+python -m pytest tests/test_mujoco_sim.py -q -k spare_part_recovery
 python -m llm_mr_bt_planner doctor
 ```
 

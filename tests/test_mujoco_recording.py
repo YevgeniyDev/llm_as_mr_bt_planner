@@ -193,6 +193,60 @@ def test_action_directed_recording_captures_camera_cut_timeline(
     ]
 
 
+def test_status_overlay_freezes_simulation_and_records_auditable_timing(
+    tmp_path: Path,
+    recording_model,
+    fake_encoder,
+):
+    data = _Data(time=2.5)
+    recorder = SimulationVideoRecorder(
+        recording_model,
+        RecordingConfig(
+            path=tmp_path / "simulation.mp4",
+            fps=10,
+            width=64,
+            height=64,
+            camera="overview",
+            camera_mode="action_directed",
+            camera_sequence=("overview", "detail"),
+        ),
+    )
+
+    with recorder:
+        recorder.capture_initial(data, camera="overview", reason="initial_overview")
+        recorder.append_status_overlay(
+            data,
+            title="FAILURE DETECTED",
+            message="LLM IS ADAPTING THE BEHAVIOR TREE...",
+            detail="primary_part fell after placement; the simulator state is preserved.",
+            duration_seconds=0.5,
+            wall_seconds=12.3456,
+            camera="detail",
+        )
+        recorder.finish(data, camera="detail", reason="resume")
+
+    writer = fake_encoder["writer"]
+    assert len(writer.frames) == 6
+    assert data.time == 2.5
+    assert np.count_nonzero(writer.frames[1]) > 0
+    assert recorder.metadata.frame_count == 6
+    assert recorder.metadata.simulated_duration_seconds == 0.0
+    assert recorder.metadata.encoded_duration_seconds == 0.6
+    assert recorder.metadata.status_overlays == [
+        {
+            "start_frame_index": 1,
+            "frame_count": 5,
+            "encoded_duration_seconds": 0.5,
+            "simulation_time_seconds": 2.5,
+            "wall_seconds_represented": 12.3456,
+            "title": "FAILURE DETECTED",
+            "message": "LLM IS ADAPTING THE BEHAVIOR TREE...",
+            "detail": "primary_part fell after placement; the simulator state is preserved.",
+            "camera": "detail",
+        }
+    ]
+
+
 def test_capture_rejects_camera_outside_configured_sequence(
     tmp_path: Path,
     recording_model,
@@ -289,6 +343,7 @@ def test_recording_cli_defaults_are_deferred_until_recording_starts():
 def test_publication_camera_is_selected_per_mission():
     assert _default_recording_camera("three_robot_courier") == "overview"
     assert _default_recording_camera("three_robot_packaging_delivery") == "packaging_recording"
+    assert _default_recording_camera("three_robot_spare_part_recovery") == "overview"
 
 
 def test_fixed_camera_override_bypasses_action_direction():
@@ -347,6 +402,22 @@ def test_packaging_camera_program_covers_assembly_door_route_and_delivery():
         ("push_open_door_and_cross()", "packaging_door"),
         ("navigate_delivery_room()", "packaging_route"),
         ("place_parcel_at_delivery_station()", "packaging_delivery"),
+    )
+    for index, (action, camera) in enumerate(expected):
+        robot = f"robot_{index}"
+        events.append({"kind": "action_started", "robot": robot, "message": action})
+        assert director.update(events).camera == camera
+        events.append({"kind": "action_success", "robot": robot, "message": action})
+        assert director.update(events).camera == camera
+
+
+def test_recovery_camera_program_covers_fault_handoff_route_and_installation():
+    director = camera_director_for_task("three_robot_spare_part_recovery")
+    events: list[dict[str, str]] = []
+    expected = (
+        ("pick_source_part(spare_part,backup_bin)", "recovery_source"),
+        ("navigate_destination(spare_part)", "recovery_route"),
+        ("install_target(spare_part,target_fixture)", "recovery_destination"),
     )
     for index, (action, camera) in enumerate(expected):
         robot = f"robot_{index}"

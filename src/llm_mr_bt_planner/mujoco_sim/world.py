@@ -16,6 +16,7 @@ DOCK_Y = 0.54
 ROOM_ROUTE_Y = 0.76
 PAYLOAD_HALF_SIZE = 0.020
 PACKAGE_LID_HALF_SIZE = np.array([0.018, 0.018, 0.006])
+RECOVERY_TASK_ID = "three_robot_spare_part_recovery"
 WORKBENCH_TOP_Z = 0.490
 PANDA_MOUNT_Z = 0.502
 
@@ -44,6 +45,14 @@ PACKAGING_STATION_POSES: dict[str, np.ndarray] = {
     "delivery_station": np.array([3.00, 0.37, 0.550]),
 }
 
+RECOVERY_STATION_POSES: dict[str, np.ndarray] = {
+    "primary_bin": np.array([-0.18, -0.48, 0.510]),
+    "backup_bin": np.array([0.26, -0.48, 0.510]),
+    "source_cradle": np.array([0.00, 0.15, 0.550]),
+    "destination_cradle": np.array([3.00, 0.15, 0.550]),
+    "target_fixture": np.array([3.00, -0.48, 0.510]),
+}
+
 STATION_PAD_HALF_EXTENTS: dict[str, np.ndarray] = {
     "source_bin": np.array([0.085, 0.075, 0.008]),
     "source_cradle": np.array([0.085, 0.075, 0.028]),
@@ -56,6 +65,14 @@ PACKAGING_STATION_PAD_HALF_EXTENTS: dict[str, np.ndarray] = {
     "lid_supply": np.array([0.075, 0.065, 0.003]),
     "packing_station": np.array([0.10, 0.085, 0.008]),
     "delivery_station": np.array([0.12, 0.10, 0.028]),
+}
+
+RECOVERY_STATION_PAD_HALF_EXTENTS: dict[str, np.ndarray] = {
+    "primary_bin": np.array([0.085, 0.075, 0.008]),
+    "backup_bin": np.array([0.085, 0.075, 0.008]),
+    "source_cradle": np.array([0.085, 0.075, 0.028]),
+    "destination_cradle": np.array([0.10, 0.085, 0.028]),
+    "target_fixture": np.array([0.085, 0.075, 0.012]),
 }
 
 DOCK_POSES: dict[str, np.ndarray] = {
@@ -96,6 +113,11 @@ _ARENA_XML = """
     <camera name="packaging_door" pos="0.8 3.5 2.2" xyaxes="-1 0 0 0 -0.400 0.916" fovy="38"/>
     <camera name="packaging_route" pos="2.3 3.5 2.2" xyaxes="-1 0 0 0 -0.400 0.916" fovy="38"/>
     <camera name="packaging_delivery" pos="3 -3.2 2.1" xyaxes="1 0 0 0 0.342 0.940" fovy="38"/>
+    <camera name="recovery_source" pos="0 -3.0 1.9" xyaxes="1 0 0 0 0.330 0.944" fovy="36"/>
+    <camera name="recovery_floor" pos="-1.3 1.4 1.25"
+            xyaxes="-0.693109 -0.720833 0 0.349553 -0.336108 0.874554" fovy="42"/>
+    <camera name="recovery_route" pos="1.5 4.5 3.2" xyaxes="-1 0 0 0 -0.500 0.866" fovy="42"/>
+    <camera name="recovery_destination" pos="3 -3.2 2.1" xyaxes="1 0 0 0 0.342 0.940" fovy="38"/>
   </worldbody>
 </mujoco>
 """
@@ -116,15 +138,26 @@ class CourierWorld:
     source_location: str = "source_bin"
     door_joint_id: int | None = None
     qpos_writes_after_reset: int = 0
+    active_payload_name: str = "payload"
+    reset_count: int = 0
 
     @classmethod
     def build(cls, assets: Path, *, task_id: str = "three_robot_courier") -> "CourierWorld":
         packaging = task_id == "three_robot_packaging_delivery"
-        station_poses = PACKAGING_STATION_POSES if packaging else STATION_POSES
+        recovery = task_id == RECOVERY_TASK_ID
+        station_poses = (
+            PACKAGING_STATION_POSES
+            if packaging
+            else RECOVERY_STATION_POSES
+            if recovery
+            else STATION_POSES
+        )
         mount_poses = PACKAGING_PANDA_MOUNT_POSES if packaging else PANDA_MOUNT_POSES
         spec = mujoco.MjSpec.from_string(_ARENA_XML)
         if packaging:
             _add_packaging_scene(spec)
+        elif recovery:
+            _add_recovery_scene(spec)
         else:
             _add_courier_scene(spec)
 
@@ -145,23 +178,61 @@ class CourierWorld:
         _attach_panda(spec, assets, "franka_a_", mount_poses["franka_a"].tolist(), 0.0)
         _attach_panda(spec, assets, "franka_b_", mount_poses["franka_b"].tolist(), np.pi)
 
-        _add_weld(spec, "grip_franka_a", "franka_a_hand", "payload")
-        _add_weld(spec, "grip_unitree_go2_z1", "go2_z1_link06", "payload")
-        _add_weld(spec, "grip_franka_b", "franka_b_hand", "payload")
+        if recovery:
+            for object_name in ("primary_part", "spare_part"):
+                _add_weld(
+                    spec,
+                    f"grip_franka_a_{object_name}",
+                    "franka_a_hand",
+                    object_name,
+                )
+                _add_weld(
+                    spec,
+                    f"grip_unitree_go2_z1_{object_name}",
+                    "go2_z1_link06",
+                    object_name,
+                )
+                _add_weld(
+                    spec,
+                    f"grip_franka_b_{object_name}",
+                    "franka_b_hand",
+                    object_name,
+                )
+                _add_weld(
+                    spec,
+                    f"install_fixture_{object_name}",
+                    "target_fixture_body",
+                    object_name,
+                )
+        else:
+            _add_weld(spec, "grip_franka_a", "franka_a_hand", "payload")
+            _add_weld(spec, "grip_unitree_go2_z1", "go2_z1_link06", "payload")
+            _add_weld(spec, "grip_franka_b", "franka_b_hand", "payload")
         if packaging:
             _add_weld(spec, "grip_franka_b_package_lid", "franka_b_hand", "package_lid")
             _add_weld(spec, "package_seal", "payload", "package_lid")
-        else:
+        elif not recovery:
             _add_weld(spec, "install_fixture", "target_fixture_body", "payload")
 
         model = spec.compile()
         _configure_contacts_and_gravity(model)
         data = mujoco.MjData(model)
-        grip_equalities = {
-            "franka_a": model.equality("grip_franka_a").id,
-            "unitree_go2_z1": model.equality("grip_unitree_go2_z1").id,
-            "franka_b": model.equality("grip_franka_b").id,
-        }
+        grip_equalities = {}
+        if recovery:
+            for object_name in ("primary_part", "spare_part"):
+                for robot in ("franka_a", "unitree_go2_z1", "franka_b"):
+                    grip_equalities[f"{robot}:{object_name}"] = model.equality(
+                        f"grip_{robot}_{object_name}"
+                    ).id
+                grip_equalities[f"target_fixture:{object_name}"] = model.equality(
+                    f"install_fixture_{object_name}"
+                ).id
+        else:
+            grip_equalities = {
+                "franka_a": model.equality("grip_franka_a").id,
+                "unitree_go2_z1": model.equality("grip_unitree_go2_z1").id,
+                "franka_b": model.equality("grip_franka_b").id,
+            }
         if packaging:
             grip_equalities.update(
                 {
@@ -169,10 +240,17 @@ class CourierWorld:
                     "package_seal": model.equality("package_seal").id,
                 }
             )
-        else:
+        elif not recovery:
             grip_equalities["target_fixture"] = model.equality("install_fixture").id
 
-        object_body_ids = {"payload": model.body("payload").id}
+        object_body_ids = (
+            {
+                "primary_part": model.body("primary_part").id,
+                "spare_part": model.body("spare_part").id,
+            }
+            if recovery
+            else {"payload": model.body("payload").id}
+        )
         if packaging:
             object_body_ids["package_lid"] = model.body("package_lid").id
 
@@ -195,17 +273,23 @@ class CourierWorld:
                 }.items()
             },
             object_body_ids=object_body_ids,
-            payload_body_id=model.body("payload").id,
+            payload_body_id=(
+                model.body("primary_part").id if recovery else model.body("payload").id
+            ),
             base_body_id=model.body("go2_base").id,
             initial_base_xy=np.array([SOURCE_DOCK_X, DOCK_Y]),
             task_id=task_id,
-            source_location="base_supply" if packaging else "source_bin",
+            source_location=(
+                "base_supply" if packaging else "primary_bin" if recovery else "source_bin"
+            ),
             door_joint_id=model.joint("room_door_hinge").id if packaging else None,
+            active_payload_name="primary_part" if recovery else "payload",
         )
         world.reset()
         return world
 
     def reset(self) -> None:
+        self.reset_count += 1
         mujoco.mj_resetData(self.model, self.data)
         self.data.eq_active[:] = 0
 
@@ -238,8 +322,19 @@ class CourierWorld:
             self._set_qpos(f"{prefix}finger_joint2", 0.04)
             self.data.ctrl[self.model.actuator(f"{prefix}actuator8").id] = 255.0
 
-        poses = PACKAGING_STATION_POSES if self.task_id == "three_robot_packaging_delivery" else STATION_POSES
-        self._set_free_body_pose("payload", poses[self.source_location])
+        poses = (
+            PACKAGING_STATION_POSES
+            if self.task_id == "three_robot_packaging_delivery"
+            else RECOVERY_STATION_POSES
+            if self.task_id == RECOVERY_TASK_ID
+            else STATION_POSES
+        )
+        if self.task_id == RECOVERY_TASK_ID:
+            self._set_free_body_pose("primary_part", poses["primary_bin"])
+            self._set_free_body_pose("spare_part", poses["backup_bin"])
+            self.active_payload_name = "primary_part"
+        else:
+            self._set_free_body_pose("payload", poses[self.source_location])
         if "package_lid" in self.object_body_ids:
             self._set_free_body_pose("package_lid", poses["lid_supply"])
         if self.door_joint_id is not None:
@@ -253,7 +348,7 @@ class CourierWorld:
 
     @property
     def payload_position(self) -> np.ndarray:
-        return self.object_position("payload")
+        return self.object_position(self.active_payload_name)
 
     def object_position(self, name: str) -> np.ndarray:
         return self.data.xpos[self.object_body_ids[name]].copy()
@@ -298,6 +393,10 @@ class CourierWorld:
         self.model.eq_data[equality_id, 6:10] = relative_quat
         self.model.eq_data[equality_id, 10] = 0.05
         self.data.eq_active[equality_id] = 1
+        if ":" in owner:
+            candidate = owner.rpartition(":")[2]
+            if candidate in self.object_body_ids and candidate != "package_lid":
+                self.active_payload_name = candidate
 
     def deactivate_weld(self, owner: str) -> None:
         self.data.eq_active[self.grip_equalities[owner]] = 0
@@ -313,10 +412,13 @@ class CourierWorld:
             return
         geom_id = self.model.geom(f"{location}_pad").id
         self.model.geom_friction[geom_id] = [4.0, 0.08, 0.015] if enabled else [1.2, 0.02, 0.005]
-        payload_geom_id = self.model.geom("payload_geom").id
-        self.model.geom_friction[payload_geom_id] = (
-            [3.0, 0.06, 0.012] if enabled else [1.4, 0.03, 0.008]
-        )
+        for object_name in self.object_body_ids:
+            if object_name == "package_lid":
+                continue
+            geom_id = self.model.geom(f"{object_name}_geom").id
+            self.model.geom_friction[geom_id] = (
+                [3.0, 0.06, 0.012] if enabled else [1.4, 0.03, 0.008]
+            )
 
     def object_contact_with(self, object_name: str, body_prefix: str) -> bool:
         object_body_id = self.object_body_ids[object_name]
@@ -334,18 +436,28 @@ class CourierWorld:
     def payload_contact_with(self, body_prefix: str) -> bool:
         return self.object_contact_with("payload", body_prefix)
 
-    def payload_contact_with_z1_finger_pad(self, side: str) -> bool:
+    def object_contact_with_z1_finger_pad(self, object_name: str, side: str) -> bool:
         pad_geoms = self.z1_finger_pad_geoms[side]
+        object_body_id = self.object_body_ids[object_name]
         for index in range(self.data.ncon):
             contact = self.data.contact[index]
             body1 = int(self.model.geom_bodyid[contact.geom1])
             body2 = int(self.model.geom_bodyid[contact.geom2])
-            if self.payload_body_id not in {body1, body2}:
+            if object_body_id not in {body1, body2}:
                 continue
-            other_geom = int(contact.geom2 if body1 == self.payload_body_id else contact.geom1)
+            other_geom = int(contact.geom2 if body1 == object_body_id else contact.geom1)
             if other_geom in pad_geoms:
                 return True
         return False
+
+    def payload_contact_with_z1_finger_pad(self, side: str) -> bool:
+        return self.object_contact_with_z1_finger_pad(self.active_payload_name, side)
+
+    def apply_object_force(self, object_name: str, force: np.ndarray) -> None:
+        self.data.xfrc_applied[self.object_body_ids[object_name], :3] = force
+
+    def clear_object_force(self, object_name: str) -> None:
+        self.data.xfrc_applied[self.object_body_ids[object_name], :] = 0
 
     @property
     def door_angle(self) -> float:
@@ -459,6 +571,48 @@ def _add_courier_scene(spec: mujoco.MjSpec) -> None:
     _add_payload(spec, STATION_POSES["source_bin"])
 
 
+def _add_recovery_scene(spec: mujoco.MjSpec) -> None:
+    _add_workbench(
+        spec,
+        "source",
+        center_x=0.00,
+        half_x=0.72,
+        mounts={"panda": PANDA_MOUNT_POSES["franka_a"][:2]},
+    )
+    _add_workbench(
+        spec,
+        "destination",
+        center_x=3.00,
+        half_x=0.65,
+        mounts={"panda": PANDA_MOUNT_POSES["franka_b"][:2]},
+    )
+    colors = {
+        "primary_bin": [0.78, 0.42, 0.12, 1.0],
+        "backup_bin": [0.18, 0.48, 0.82, 1.0],
+        "source_cradle": [0.15, 0.48, 0.42, 1.0],
+        "destination_cradle": [0.16, 0.62, 0.30, 1.0],
+        "target_fixture": [0.68, 0.16, 0.18, 1.0],
+    }
+    _add_station_pads(
+        spec,
+        RECOVERY_STATION_POSES,
+        RECOVERY_STATION_PAD_HALF_EXTENTS,
+        colors,
+    )
+    _add_payload(
+        spec,
+        RECOVERY_STATION_POSES["primary_bin"],
+        name="primary_part",
+        color=[0.95, 0.52, 0.10, 1.0],
+    )
+    _add_payload(
+        spec,
+        RECOVERY_STATION_POSES["backup_bin"],
+        name="spare_part",
+        color=[0.12, 0.56, 0.95, 1.0],
+    )
+
+
 def _add_packaging_scene(spec: mujoco.MjSpec) -> None:
     _add_workbench(
         spec,
@@ -524,12 +678,13 @@ def _add_payload(
     spec: mujoco.MjSpec,
     position: np.ndarray,
     *,
+    name: str = "payload",
     color: list[float] | None = None,
 ) -> None:
-    payload = spec.worldbody.add_body(name="payload", pos=position)
-    payload.add_freejoint(name="payload_freejoint")
+    payload = spec.worldbody.add_body(name=name, pos=position)
+    payload.add_freejoint(name=f"{name}_freejoint")
     payload.add_geom(
-        name="payload_geom",
+        name=f"{name}_geom",
         type=mujoco.mjtGeom.mjGEOM_BOX,
         size=[PAYLOAD_HALF_SIZE] * 3,
         mass=0.12,

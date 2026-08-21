@@ -40,7 +40,7 @@ class OpenAIClient:
         self._api_key = api_key or os.environ.get("OPENAI_API_KEY")
         resolved_base_url = base_url or os.environ.get("OPENAI_BASE_URL") or "https://api.openai.com/v1"
         self._base_url = resolved_base_url.rstrip("/")
-        self._timeout = timeout if timeout is not None else float(os.environ.get("OPENAI_TIMEOUT_SECONDS", "60"))
+        self._timeout = timeout if timeout is not None else float(os.environ.get("OPENAI_TIMEOUT_SECONDS", "180"))
         requested_temperature = (
             temperature if temperature is not None else float(os.environ.get("OPENAI_TEMPERATURE", "0"))
         )
@@ -49,6 +49,7 @@ class OpenAIClient:
         )
         self.temperature = self._temperature
         self.seed = seed
+        self.response_metadata: list[dict[str, Any]] = []
 
     def set_seed(self, seed: int | None) -> None:
         """Set the best-effort provider seed used by the next request."""
@@ -76,9 +77,23 @@ class OpenAIClient:
             headers={"Authorization": f"Bearer {self._api_key}", "Content-Type": "application/json"},
             method="POST",
         )
+        started = time.perf_counter()
         body = _send(request, self._timeout)
+        elapsed = time.perf_counter() - started
         result = json.loads(body)
-        return result["choices"][0]["message"]["content"]
+        content = result["choices"][0]["message"]["content"]
+        self.response_metadata.append(
+            {
+                "response_id": result.get("id"),
+                "model_requested": self.model,
+                "model_returned": result.get("model"),
+                "created": result.get("created"),
+                "system_fingerprint": result.get("system_fingerprint"),
+                "usage": result.get("usage"),
+                "elapsed_wall_seconds": round(elapsed, 4),
+            }
+        )
+        return content
 
     def _completions_url(self) -> str:
         explicit = os.environ.get("OPENAI_API_URL")

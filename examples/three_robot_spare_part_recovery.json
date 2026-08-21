@@ -1,0 +1,178 @@
+{
+  "schema_version": "1.0",
+  "task_id": "three_robot_spare_part_recovery",
+  "instruction": "Install the designated primary_part in target_fixture through the normal three-robot handoff. A spare_part is stored at backup_bin as inventory, but use the primary part during nominal execution. Respect both exclusive exchange zones and every declared manipulation, docking, stationary-base, grasp, usable-part, and stowed-arm precondition. For direct execution by this MuJoCo adapter, use only Sequence and Fallback composite nodes.",
+  "initial_state": [
+    "system_ready()",
+    "robot_ready(franka_a)",
+    "robot_ready(unitree_go2_z1)",
+    "robot_ready(franka_b)",
+    "base_stationary(unitree_go2_z1)",
+    "arm_stowed(unitree_go2_z1)",
+    "docked(unitree_go2_z1,source_dock)",
+    "usable(primary_part)",
+    "usable(spare_part)",
+    "at(primary_part,primary_bin)",
+    "at(spare_part,backup_bin)",
+    "gripper_empty(franka_a)",
+    "gripper_empty(unitree_go2_z1)",
+    "gripper_empty(franka_b)"
+  ],
+  "goal_state": [
+    "installed_component(target_fixture)",
+    "gripper_empty(franka_a)",
+    "gripper_empty(unitree_go2_z1)",
+    "gripper_empty(franka_b)",
+    "arm_stowed(unitree_go2_z1)",
+    "docked(unitree_go2_z1,destination_dock)"
+  ],
+  "entities": [
+    {"id": "primary_part", "type": "part"},
+    {"id": "spare_part", "type": "part"},
+    {"id": "primary_bin", "type": "location"},
+    {"id": "backup_bin", "type": "location"},
+    {"id": "source_cradle", "type": "location"},
+    {"id": "destination_cradle", "type": "location"},
+    {"id": "target_fixture", "type": "fixture"},
+    {"id": "source_zone", "type": "zone"},
+    {"id": "destination_zone", "type": "zone"},
+    {"id": "source_dock", "type": "dock"},
+    {"id": "destination_dock", "type": "dock"}
+  ],
+  "resources": [
+    {"id": "source_zone", "capacity": 1},
+    {"id": "destination_zone", "capacity": 1}
+  ],
+  "robots": [
+    {
+      "id": "franka_a",
+      "name": "Franka Emika Panda A",
+      "type": "fixed_manipulator",
+      "capabilities": [
+        {
+          "name": "pick_source_part",
+          "parameters": ["part", "location"],
+          "parameter_types": ["part", "location"],
+          "resources": ["source_zone"],
+          "action_type": "manipulation",
+          "duration_ticks": 2,
+          "timeout_ticks": 10,
+          "preconditions": ["system_ready()", "robot_ready(franka_a)", "usable(part)", "at(part,location)", "gripper_empty(franka_a)"],
+          "effects": {
+            "add": ["holding(franka_a,part)"],
+            "delete": ["at(part)", "gripper_empty(franka_a)"]
+          }
+        },
+        {
+          "name": "place_source_cradle",
+          "parameters": ["part"],
+          "parameter_types": ["part"],
+          "resources": ["source_zone"],
+          "action_type": "manipulation",
+          "duration_ticks": 2,
+          "timeout_ticks": 10,
+          "preconditions": ["system_ready()", "robot_ready(franka_a)", "holding(franka_a,part)"],
+          "effects": {
+            "add": ["at(part,source_cradle)", "gripper_empty(franka_a)"],
+            "delete": ["holding(franka_a,part)"]
+          }
+        }
+      ]
+    },
+    {
+      "id": "unitree_go2_z1",
+      "name": "Unitree Go2 with Z1 arm",
+      "type": "mobile_manipulator",
+      "capabilities": [
+        {
+          "name": "pick_source_cradle",
+          "parameters": ["part"],
+          "parameter_types": ["part"],
+          "resources": ["source_zone"],
+          "action_type": "manipulation",
+          "duration_ticks": 3,
+          "timeout_ticks": 25,
+          "preconditions": ["system_ready()", "robot_ready(unitree_go2_z1)", "base_stationary(unitree_go2_z1)", "arm_stowed(unitree_go2_z1)", "docked(unitree_go2_z1,source_dock)", "at(part,source_cradle)", "gripper_empty(unitree_go2_z1)"],
+          "effects": {
+            "add": ["holding(unitree_go2_z1,part)"],
+            "delete": ["at(part,source_cradle)", "gripper_empty(unitree_go2_z1)", "arm_stowed(unitree_go2_z1)"]
+          }
+        },
+        {
+          "name": "navigate_destination",
+          "parameters": ["part"],
+          "parameter_types": ["part"],
+          "resources": [],
+          "action_type": "navigation",
+          "duration_ticks": 4,
+          "timeout_ticks": 30,
+          "preconditions": ["system_ready()", "robot_ready(unitree_go2_z1)", "base_stationary(unitree_go2_z1)", "holding(unitree_go2_z1,part)", "docked(unitree_go2_z1,source_dock)"],
+          "effects": {
+            "add": ["docked(unitree_go2_z1,destination_dock)"],
+            "delete": ["docked(unitree_go2_z1,source_dock)"]
+          }
+        },
+        {
+          "name": "place_destination_cradle",
+          "parameters": ["part"],
+          "parameter_types": ["part"],
+          "resources": ["destination_zone"],
+          "action_type": "manipulation",
+          "duration_ticks": 2,
+          "timeout_ticks": 25,
+          "preconditions": ["system_ready()", "robot_ready(unitree_go2_z1)", "base_stationary(unitree_go2_z1)", "holding(unitree_go2_z1,part)"],
+          "effects": {
+            "add": ["at(part,destination_cradle)", "gripper_empty(unitree_go2_z1)"],
+            "delete": ["holding(unitree_go2_z1,part)"]
+          }
+        },
+        {
+          "name": "stow_arm_destination",
+          "parameters": ["part"],
+          "parameter_types": ["part"],
+          "resources": ["destination_zone"],
+          "action_type": "verification",
+          "duration_ticks": 2,
+          "timeout_ticks": 10,
+          "preconditions": ["robot_ready(unitree_go2_z1)", "base_stationary(unitree_go2_z1)", "at(part,destination_cradle)", "gripper_empty(unitree_go2_z1)"],
+          "effects": {"add": ["arm_stowed(unitree_go2_z1)"], "delete": []}
+        }
+      ]
+    },
+    {
+      "id": "franka_b",
+      "name": "Franka Emika Panda B",
+      "type": "fixed_manipulator",
+      "capabilities": [
+        {
+          "name": "pick_destination_cradle",
+          "parameters": ["part"],
+          "parameter_types": ["part"],
+          "resources": ["destination_zone"],
+          "action_type": "manipulation",
+          "duration_ticks": 2,
+          "timeout_ticks": 10,
+          "preconditions": ["system_ready()", "robot_ready(franka_b)", "at(part,destination_cradle)", "gripper_empty(franka_b)"],
+          "effects": {
+            "add": ["holding(franka_b,part)"],
+            "delete": ["at(part,destination_cradle)", "gripper_empty(franka_b)"]
+          }
+        },
+        {
+          "name": "install_target",
+          "parameters": ["part", "target"],
+          "parameter_types": ["part", "fixture"],
+          "resources": ["destination_zone"],
+          "action_type": "manipulation",
+          "duration_ticks": 3,
+          "timeout_ticks": 15,
+          "preconditions": ["system_ready()", "robot_ready(franka_b)", "usable(part)", "holding(franka_b,part)"],
+          "effects": {
+            "add": ["installed(part,target)", "installed_component(target)", "gripper_empty(franka_b)"],
+            "delete": ["holding(franka_b,part)"]
+          }
+        }
+      ]
+    }
+  ]
+}

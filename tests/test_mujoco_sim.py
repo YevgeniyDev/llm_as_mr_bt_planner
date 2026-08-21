@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import json
 import os
+from hashlib import sha256
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -11,25 +14,238 @@ import pytest
 mujoco = pytest.importorskip("mujoco")
 
 from llm_mr_bt_planner.artifacts import load_plan_file
+from llm_mr_bt_planner.cli import _build_parser
 from llm_mr_bt_planner.config import PROJECT_ROOT
 from llm_mr_bt_planner.domain import load_scenario
+from llm_mr_bt_planner.mujoco_sim import adaptive_demo_runner
+from llm_mr_bt_planner.mujoco_sim.adaptive_demo_runner import (
+    _fault_blindness_evidence,
+    validate_nominal_primary_only,
+)
 from llm_mr_bt_planner.mujoco_sim.assets import _is_valid, default_asset_root
 from llm_mr_bt_planner.mujoco_sim.controllers import ContactGaitController, build_arm_controllers
 from llm_mr_bt_planner.mujoco_sim.executor import (
     PANDA_GRASP_ROTATIONS,
     PhysicalExecutor,
 )
+from llm_mr_bt_planner.mujoco_sim.recovery_runner import run_recovery_cli
 from llm_mr_bt_planner.mujoco_sim.runner import _configure_free_camera
 from llm_mr_bt_planner.mujoco_sim.world import (
     DESTINATION_DOCK_X,
     DOCK_Y,
     PACKAGING_STATION_POSES,
     PANDA_MOUNT_POSES,
+    RECOVERY_STATION_POSES,
     SOURCE_DOCK_X,
     STATION_PAD_HALF_EXTENTS,
     STATION_POSES,
     CourierWorld,
 )
+from llm_mr_bt_planner.prompts import build_prompt
+
+
+def test_adaptive_demo_nominal_gate_rejects_a_preplanned_spare_branch():
+    nominal = load_plan_file(
+        PROJECT_ROOT / "examples" / "three_robot_spare_part_recovery.bt.json"
+    )
+    recovery = load_plan_file(
+        PROJECT_ROOT
+        / "examples"
+        / "three_robot_spare_part_recovery.expected_recovery.bt.json"
+    )
+
+    actions = validate_nominal_primary_only(nominal)
+
+    assert any("primary_part" in action["parameters"] for action in actions)
+    assert not any("spare_part" in action["parameters"] for action in actions)
+    with pytest.raises(ValueError, match="must not contain a preplanned recovery branch"):
+        validate_nominal_primary_only(recovery)
+
+
+def test_adaptive_demo_nominal_prompt_contains_no_fault_identifier():
+    scenario = load_scenario(
+        PROJECT_ROOT / "examples" / "three_robot_spare_part_recovery.json",
+        strict=True,
+    )
+    fault_path = (
+        PROJECT_ROOT / "examples" / "three_robot_spare_part_recovery.fault.json"
+    )
+
+    evidence = _fault_blindness_evidence(
+        nominal_user_prompt=build_prompt(scenario),
+        fault_path=fault_path,
+        fault_id="drop_primary_after_handoff_placement",
+        nominal_actions=validate_nominal_primary_only(
+            load_plan_file(
+                PROJECT_ROOT / "examples" / "three_robot_spare_part_recovery.bt.json"
+            )
+        ),
+        nominal_completed=1.0,
+        fault_loaded=2.0,
+    )
+
+    assert evidence["boundary_verified"] is True
+    assert evidence["fault_disclosed_to_nominal_llm"] is False
+    assert evidence["fault_configuration_loaded_after_nominal_bt_accepted"] is True
+    assert evidence["fault_id_present_in_nominal_prompt"] is False
+    assert len(evidence["nominal_request_prompt_sha256"]) == 64
+    assert len(evidence["fault_specification_sha256"]) == 64
+
+
+def test_adaptive_demo_orchestrates_generation_before_fault_and_publishes_audit_bundle(
+    monkeypatch,
+    tmp_path: Path,
+):
+    scenario_path = (
+        PROJECT_ROOT / "examples" / "three_robot_spare_part_recovery.json"
+    )
+    fault_path = (
+        PROJECT_ROOT / "examples" / "three_robot_spare_part_recovery.fault.json"
+    )
+    nominal = load_plan_file(
+        PROJECT_ROOT / "examples" / "three_robot_spare_part_recovery.bt.json"
+    )
+    adapted = load_plan_file(
+        PROJECT_ROOT
+        / "examples"
+        / "three_robot_spare_part_recovery.expected_recovery.bt.json"
+    )
+    scenario = load_scenario(scenario_path, strict=True)
+    order: list[str] = []
+
+    def fake_generate(self, document, **kwargs):  # noqa: ARG001
+        assert "fault_loaded" not in order
+        order.append("nominal_generated")
+        kwargs["progress"]("Initial candidate: provider response received", 0.5)
+        return SimpleNamespace(
+            plan=nominal,
+            validation=SimpleNamespace(valid=True),
+            simulation=SimpleNamespace(success=True),
+            planner_result=SimpleNamespace(
+                plan=nominal.to_dict(),
+                provider="openai",
+                provider_responses=(
+                    {"model_returned": "gpt-5.6-sol", "response_id": "chat_test"},
+                ),
+                correction_rounds=0,
+            ),
+        )
+
+    original_load_fault = adaptive_demo_runner.load_fault_spec
+
+    def tracked_load_fault(path):
+        assert order == ["nominal_generated"]
+        order.append("fault_loaded")
+        return original_load_fault(path)
+
+    def fake_plan_recovery(client, runtime_scenario, **kwargs):  # noqa: ARG001
+        order.append("recovery_generated")
+        kwargs["progress"]("Validated continuation BT is ready for MuJoCo", 1.0)
+        return SimpleNamespace(
+            plan=adapted,
+            runtime_scenario=scenario,
+            validation=SimpleNamespace(valid=True, to_dicts=lambda: []),
+            simulation=SimpleNamespace(to_dict=lambda: {"success": True}),
+            attempts=(
+                {
+                    "provenance": {
+                        "model_returned": "gpt-5.6-sol",
+                        "response_id": "resp_test",
+                    }
+                },
+            ),
+            provider="openai",
+            model="gpt-5.6-sol",
+            reasoning_effort="high",
+        )
+
+    def fake_trial(
+        scenario_arg,
+        nominal_arg,
+        fault_arg,
+        *,
+        continue_after_failure,
+        **kwargs,
+    ):  # noqa: ARG001
+        world = object()
+        executor = SimpleNamespace(world=world, arms={}, gait=object())
+        observation = {
+            "classification": "dropped_to_floor",
+            "object": "primary_part",
+        }
+        _, continuity = continue_after_failure(
+            executor,
+            ("usable(spare_part)", "at(spare_part,backup_bin)"),
+            observation,
+            {"world_identity": id(world)},
+        )
+        continuity["no_reset_through_completion"] = True
+        return {
+            "physical_execution": {"success": True},
+            "failure_observation": observation,
+            "failure_snapshot": {"state": "preserved"},
+            "continuity": continuity,
+            "recording": None,
+            "live_viewer": {
+                "enabled": True,
+                "camera_mode": "action_directed",
+                "realtime_factor": 1.0,
+            },
+        }
+
+    monkeypatch.setenv("OPENAI_API_KEY", "test-only")
+    monkeypatch.setattr(adaptive_demo_runner.PlannerService, "generate", fake_generate)
+    monkeypatch.setattr(adaptive_demo_runner, "load_fault_spec", tracked_load_fault)
+    monkeypatch.setattr(adaptive_demo_runner, "ensure_assets", lambda *args, **kwargs: tmp_path)
+    monkeypatch.setattr(adaptive_demo_runner, "plan_recovery", fake_plan_recovery)
+    monkeypatch.setattr(adaptive_demo_runner, "_run_fault_trial", fake_trial)
+    monkeypatch.setattr(
+        adaptive_demo_runner,
+        "_world_snapshot",
+        lambda *args, **kwargs: {"state": "preserved"},
+    )
+    monkeypatch.setattr(
+        adaptive_demo_runner,
+        "_continuity_invariant",
+        lambda world: {"world_identity": id(world)},
+    )
+    monkeypatch.setattr(
+        adaptive_demo_runner,
+        "PhysicalExecutor",
+        lambda *args, **kwargs: SimpleNamespace(),
+    )
+    args = _build_parser().parse_args(
+        [
+            "adaptive-demo",
+            "--scenario",
+            str(scenario_path),
+            "--fault",
+            str(fault_path),
+            "--output",
+            str(tmp_path / "runs"),
+            "--heartbeat-seconds",
+            "60",
+            "--no-video",
+        ]
+    )
+
+    assert adaptive_demo_runner.run_adaptive_demo_cli(args) == 0
+    assert order == ["nominal_generated", "fault_loaded", "recovery_generated"]
+    output_dir = next((tmp_path / "runs").iterdir())
+    manifest = json.loads(
+        (output_dir / "adaptive_demo_manifest.json").read_text(encoding="utf-8")
+    )
+    prompt_bytes = (output_dir / "nominal_user_prompt.txt").read_bytes()
+    assert manifest["success"] is True
+    assert manifest["fault_blindness"]["boundary_verified"] is True
+    assert manifest["fault_blindness"]["nominal_prompt_file_sha256"] == sha256(
+        prompt_bytes
+    ).hexdigest()
+    assert manifest["nominal_planner"]["model_verified"] is True
+    assert manifest["recovery_planner"]["model_verified"] is True
+    assert manifest["live_viewer"]["enabled"] is True
+    assert "adaptive_demo.log" in manifest["files"]
+    assert "adaptive_demo_events.json" in manifest["files"]
 
 
 @pytest.fixture(scope="module")
@@ -84,6 +300,37 @@ def test_packaging_scene_contains_independent_parts_and_a_closed_dynamic_door(
     assert not world.equality_active("package_seal")
     assert world.model.geom("room_door_panel").id >= 0
     assert world.model.geom("delivery_pedestal_top").id >= 0
+
+
+def test_recovery_scene_has_independent_primary_and_spare_parts(
+    menagerie_assets: Path,
+):
+    world = CourierWorld.build(
+        menagerie_assets,
+        task_id="three_robot_spare_part_recovery",
+    )
+
+    assert set(world.object_body_ids) == {"primary_part", "spare_part"}
+    assert world.model.body("primary_part").jntnum == 1
+    assert world.model.body("spare_part").jntnum == 1
+    assert world.object_position("primary_part") == pytest.approx(
+        RECOVERY_STATION_POSES["primary_bin"]
+    )
+    assert world.object_position("spare_part") == pytest.approx(
+        RECOVERY_STATION_POSES["backup_bin"]
+    )
+    assert world.active_payload_name == "primary_part"
+    assert world.reset_count == 1
+    assert "franka_a:primary_part" in world.grip_equalities
+    assert "franka_a:spare_part" in world.grip_equalities
+    assert "target_fixture:primary_part" in world.grip_equalities
+    assert "target_fixture:spare_part" in world.grip_equalities
+    assert not any(world.equality_active(key) for key in world.grip_equalities)
+
+    world.activate_weld("franka_a:spare_part")
+    assert world.active_payload_name == "spare_part"
+    assert world.equality_active("franka_a:spare_part")
+    assert not world.equality_active("franka_a:primary_part")
 
 
 def test_physical_blackboard_canonicalizes_llm_predicate_whitespace(
@@ -204,8 +451,16 @@ def test_composed_world_supports_publication_recording_settings(menagerie_assets
         "packaging_door",
         "packaging_route",
         "packaging_delivery",
+        "recovery_source",
+        "recovery_floor",
+        "recovery_route",
+        "recovery_destination",
     }
-    for task_id in ("three_robot_courier", "three_robot_packaging_delivery"):
+    for task_id in (
+        "three_robot_courier",
+        "three_robot_packaging_delivery",
+        "three_robot_spare_part_recovery",
+    ):
         world = CourierWorld.build(menagerie_assets, task_id=task_id)
 
         assert all(world.model.camera(name).id >= 0 for name in recording_cameras)
@@ -341,3 +596,56 @@ def test_packaging_reference_assembles_opens_door_and_delivers(menagerie_assets:
     assert "sealed parcel remained in the Z1 grasp" in door_event["detail"]
     assert report.locomotion["contact_driven_displacement_m"] > 2.0
     assert report.locomotion["direct_base_state_writes"] == 0
+
+
+@pytest.mark.skipif(
+    os.environ.get("LMRBTP_RUN_MUJOCO_RECOVERY_E2E") != "1",
+    reason=(
+        "Set LMRBTP_RUN_MUJOCO_RECOVERY_E2E=1 to run the fault/control/same-state "
+        "oracle recovery integration test."
+    ),
+)
+def test_spare_part_recovery_continues_without_reset(
+    menagerie_assets: Path,
+    tmp_path: Path,
+):
+    args = _build_parser().parse_args(
+        [
+            "recovery-experiment",
+            "--planner",
+            "oracle",
+            "--no-video",
+            "--assets-dir",
+            str(menagerie_assets),
+            "--output",
+            str(tmp_path),
+        ]
+    )
+
+    assert run_recovery_cli(args) == 0
+    run_dir = next(tmp_path.iterdir())
+    manifest = json.loads((run_dir / "experiment_manifest.json").read_text(encoding="utf-8"))
+    adaptive = json.loads(
+        (run_dir / "adaptive_recovery_report.json").read_text(encoding="utf-8")
+    )
+
+    assert manifest["success"] is False
+    assert manifest["planner"]["real_llm_evidence"] is False
+    assert manifest["control"]["failed_as_expected"] is True
+    assert manifest["adaptive"]["recovered"] is True
+    assert adaptive["failure_observation"]["classification"] == "dropped_to_floor"
+    assert adaptive["failure_observation"]["trigger_evidence"]["placed_at_location"] is True
+    assert (
+        adaptive["failure_observation"]["trigger_evidence"]["placement_event"]["kind"]
+        == "action_success"
+    )
+    assert (
+        adaptive["failure_observation"]["trigger_evidence"]["next_robot_holding_object"]
+        is False
+    )
+    assert "unitree_go2_z1/pick_source_cradle" in adaptive["failure_observation"][
+        "nominal_bt_failure"
+    ]
+    assert adaptive["continuity"]["state_hash_unchanged_while_replanning"] is True
+    assert adaptive["continuity"]["no_reset_through_completion"] is True
+    assert all(adaptive["physical_execution"]["final_goals"].values())

@@ -34,6 +34,7 @@ class PlannerResult:
     validation_errors: list[dict[str, str]]
     simulation: dict[str, Any]
     wall_seconds: float = 0.0
+    provider_responses: tuple[dict[str, Any], ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -45,6 +46,7 @@ class PlannerResult:
             "goal_success": self.goal_success,
             "correction_rounds": self.correction_rounds,
             "wall_seconds": round(self.wall_seconds, 3),
+            "provider_responses": list(self.provider_responses),
             "plan": self.plan,
             "validation_errors": self.validation_errors,
             "simulation": self.simulation,
@@ -129,6 +131,7 @@ def run_planner(
         validation_errors=validation.to_dicts(),
         simulation=simulation.to_dict(),
         wall_seconds=time.monotonic() - start,
+        provider_responses=tuple(getattr(client, "response_metadata", ())),
     )
 
 

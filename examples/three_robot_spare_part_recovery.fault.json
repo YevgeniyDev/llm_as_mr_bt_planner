@@ -1,0 +1,20 @@
+{
+  "schema_version": "1.0",
+  "fault_id": "drop_primary_after_handoff_placement",
+  "fault_type": "drop_object",
+  "recoverable": true,
+  "trigger": {
+    "robot": "franka_a",
+    "action": "place_source_cradle",
+    "object": "primary_part",
+    "event": "action_success",
+    "location": "source_cradle",
+    "before_robot": "unitree_go2_z1",
+    "before_action": "pick_source_cradle"
+  },
+  "force_newtons": [0.0, 4.0, 0.0],
+  "duration_seconds": 0.16,
+  "minimum_displacement_m": 0.08,
+  "floor_height_threshold_m": 0.08,
+  "seed": 7
+}

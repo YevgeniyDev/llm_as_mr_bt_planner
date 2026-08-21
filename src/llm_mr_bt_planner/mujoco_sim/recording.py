@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import textwrap
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
 import mujoco
+import numpy as np
 
 DEFAULT_VIDEO_FPS = 30
 DEFAULT_VIDEO_WIDTH = 1920
@@ -56,6 +58,7 @@ class RecordingMetadata:
     encoded_duration_seconds: float
     includes_settling: bool
     final_frame_forced: bool
+    status_overlays: list[dict[str, Any]]
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -82,6 +85,7 @@ class SimulationVideoRecorder:
         self._last_camera: str | None = None
         self._cameras_used: list[str] = []
         self._camera_cuts: list[dict[str, Any]] = []
+        self._status_overlays: list[dict[str, Any]] = []
         self._allowed_cameras = frozenset((config.camera, *config.camera_sequence))
 
     def __enter__(self) -> SimulationVideoRecorder:
@@ -133,6 +137,7 @@ class SimulationVideoRecorder:
             encoded_duration_seconds=round(self._frame_count / self.config.fps, 6),
             includes_settling=True,
             final_frame_forced=self._final_frame_forced,
+            status_overlays=list(self._status_overlays),
         )
 
     def capture_initial(
@@ -177,6 +182,60 @@ class SimulationVideoRecorder:
             self._next_frame_index += 1
             target_time = self._start_sim_time + self._next_frame_index / self.config.fps
 
+    def append_status_overlay(
+        self,
+        data: mujoco.MjData,
+        *,
+        title: str,
+        message: str,
+        detail: str,
+        duration_seconds: float,
+        wall_seconds: float,
+        camera: str | None = None,
+    ) -> None:
+        """Append a frozen, labeled status card without advancing MuJoCo time."""
+        self._require_open()
+        if self._start_sim_time is None:
+            raise RuntimeError("capture_initial(data) must precede a status overlay.")
+        if duration_seconds <= 0:
+            raise ValueError("Status overlay duration must be positive.")
+        assert self._renderer is not None
+        assert self._writer is not None
+
+        selected_camera = self._register_camera(
+            data,
+            camera,
+            reason="status_overlay:failure_handling",
+        )
+        self._renderer.update_scene(data, camera=selected_camera)
+        frame = self._renderer.render()
+        rendered = _status_overlay_frame(
+            frame,
+            title=title,
+            message=message,
+            detail=detail,
+        )
+        frame_count = max(1, round(duration_seconds * self.config.fps))
+        start_frame = self._frame_count
+        for _ in range(frame_count):
+            self._writer.append_data(rendered)
+        self._frame_count += frame_count
+        self._last_frame_sim_time = float(data.time)
+        self._last_camera = selected_camera
+        self._status_overlays.append(
+            {
+                "start_frame_index": start_frame,
+                "frame_count": frame_count,
+                "encoded_duration_seconds": round(frame_count / self.config.fps, 6),
+                "simulation_time_seconds": round(float(data.time), 6),
+                "wall_seconds_represented": round(wall_seconds, 4),
+                "title": title,
+                "message": message,
+                "detail": detail,
+                "camera": selected_camera,
+            }
+        )
+
     def finish(
         self,
         data: mujoco.MjData,
@@ -216,6 +275,20 @@ class SimulationVideoRecorder:
     ) -> None:
         assert self._renderer is not None
         assert self._writer is not None
+        selected_camera = self._register_camera(data, camera, reason=reason)
+        self._renderer.update_scene(data, camera=selected_camera)
+        self._writer.append_data(self._renderer.render())
+        self._frame_count += 1
+        self._last_frame_sim_time = float(data.time)
+        self._last_camera = selected_camera
+
+    def _register_camera(
+        self,
+        data: mujoco.MjData,
+        camera: str | None,
+        *,
+        reason: str,
+    ) -> str:
         selected_camera = self.config.camera if camera is None else camera
         if selected_camera not in self._allowed_cameras:
             allowed = ", ".join(sorted(self._allowed_cameras))
@@ -235,11 +308,7 @@ class SimulationVideoRecorder:
                     "reason": reason,
                 }
             )
-        self._renderer.update_scene(data, camera=selected_camera)
-        self._writer.append_data(self._renderer.render())
-        self._frame_count += 1
-        self._last_frame_sim_time = float(data.time)
-        self._last_camera = selected_camera
+        return selected_camera
 
     def _validate(self) -> None:
         if self.config.path.exists():
@@ -298,6 +367,77 @@ class SimulationVideoRecorder:
         finally:
             if renderer is not None:
                 renderer.close()
+
+
+def _status_overlay_frame(
+    frame: np.ndarray,
+    *,
+    title: str,
+    message: str,
+    detail: str,
+) -> np.ndarray:
+    try:
+        from PIL import Image, ImageDraw, ImageFont
+    except ImportError as error:
+        raise RuntimeError(
+            "Pillow is required for the failure-handling video overlay. Reinstall with "
+            'python -m pip install -e ".[mujoco]".'
+        ) from error
+
+    image = Image.fromarray(frame).convert("RGBA")
+    shade = Image.new("RGBA", image.size, (3, 8, 18, 205))
+    image = Image.alpha_composite(image, shade)
+    draw = ImageDraw.Draw(image)
+    width, height = image.size
+    title_font = _load_overlay_font(ImageFont, max(14, round(height * 0.064)), bold=True)
+    message_font = _load_overlay_font(ImageFont, max(12, round(height * 0.038)), bold=True)
+    detail_font = _load_overlay_font(ImageFont, max(10, round(height * 0.027)), bold=False)
+
+    accent_height = max(4, round(height * 0.008))
+    draw.rectangle((0, 0, width, accent_height), fill=(242, 133, 38, 255))
+    title_y = round(height * 0.27)
+    _draw_centered(draw, width, title_y, title, title_font, fill=(255, 160, 55, 255))
+    message_y = title_y + round(height * 0.11)
+    _draw_centered(draw, width, message_y, message, message_font, fill=(245, 248, 255, 255))
+
+    wrap_width = max(24, round(72 * width / 1920))
+    lines = textwrap.wrap(detail, width=wrap_width) or [detail]
+    line_height = max(14, round(height * 0.041))
+    detail_y = message_y + round(height * 0.10)
+    for index, line in enumerate(lines[:4]):
+        _draw_centered(
+            draw,
+            width,
+            detail_y + index * line_height,
+            line,
+            detail_font,
+            fill=(205, 214, 230, 255),
+        )
+
+    footer = "SIMULATION PAUSED SAFELY  |  MUJOCO STATE PRESERVED"
+    _draw_centered(
+        draw,
+        width,
+        round(height * 0.88),
+        footer,
+        detail_font,
+        fill=(139, 196, 255, 255),
+    )
+    return np.asarray(image.convert("RGB"))
+
+
+def _load_overlay_font(image_font, size: int, *, bold: bool):
+    filename = "DejaVuSans-Bold.ttf" if bold else "DejaVuSans.ttf"
+    try:
+        return image_font.truetype(filename, size=size)
+    except OSError:
+        return image_font.load_default()
+
+
+def _draw_centered(draw, width: int, y: int, text: str, font, *, fill) -> None:
+    box = draw.textbbox((0, 0), text, font=font)
+    text_width = box[2] - box[0]
+    draw.text(((width - text_width) / 2, y), text, font=font, fill=fill)
 
 
 def _open_video_writer(path: Path, config: RecordingConfig):
