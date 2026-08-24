@@ -124,7 +124,14 @@ class ArmController:
         self._apply(self._desired_q)
         return bool(np.max(np.abs(self.home - current)) < 0.045)
 
-    def move_tool(self, target: np.ndarray, dt: float, *, target_rotation: np.ndarray | None = None) -> bool:
+    def move_tool(
+        self,
+        target: np.ndarray,
+        dt: float,
+        *,
+        target_rotation: np.ndarray | None = None,
+        track_mobile_base: bool = True,
+    ) -> bool:
         target = np.asarray(target, dtype=float)
         target_rotation = None if target_rotation is None else np.asarray(target_rotation, dtype=float)
         rotation_changed = (self._ik_target_rotation is None) != (target_rotation is None) or (
@@ -134,7 +141,7 @@ class ArmController:
         )
         base_position = self.world.base_position
         base_rotation = self.world.data.xmat[self.world.base_body_id].reshape(3, 3).copy()
-        mobile_base_changed = self.robot == "unitree_go2_z1" and (
+        mobile_base_changed = track_mobile_base and self.robot == "unitree_go2_z1" and (
             self._ik_base_position is None
             or self._ik_base_rotation is None
             or np.linalg.norm(base_position - self._ik_base_position) > 0.003
@@ -220,28 +227,56 @@ class ArmController:
         scratch.qvel[:] = 0
         if target_rotation is not None:
             return self._solve_pose_ik(scratch, target, target_rotation)
-        regularizer = self.damping * np.eye(3)
-        for _ in range(120):
+
+        ranges = model.jnt_range[self._joint_ids]
+
+        def residual(joints: np.ndarray) -> np.ndarray:
+            scratch.qpos[self._qpos_ids] = joints
             mujoco.mj_forward(model, scratch)
-            error = target - scratch.site_xpos[self._site_id]
-            if np.linalg.norm(error) < 0.002:
-                break
-            jacobian = np.zeros((3, model.nv))
-            mujoco.mj_jacSite(model, scratch, jacobian, None, self._site_id)
-            jacobian = jacobian[:, self._dof_ids]
-            joint_delta = jacobian.T @ np.linalg.solve(
-                jacobian @ jacobian.T + regularizer,
-                error,
+            return (target - scratch.site_xpos[self._site_id]) * 5.0
+
+        starts = (
+            (
+                self.q,
+                np.array([-1.65, 2.90, -0.75, -0.20, -0.30, 0.30]),
+                np.array([-1.90, 2.55, -0.60, -0.20, -0.20, -0.90]),
+                np.array([-1.30, 2.40, -0.50, -0.40, -0.40, 1.20]),
             )
-            peak = float(np.max(np.abs(joint_delta)))
-            if peak > 0.30:
-                joint_delta *= 0.30 / peak
-            scratch.qpos[self._qpos_ids] += joint_delta
-            ranges = model.jnt_range[self._joint_ids]
-            scratch.qpos[self._qpos_ids] = np.clip(
-                scratch.qpos[self._qpos_ids], ranges[:, 0] + 1e-4, ranges[:, 1] - 1e-4
+            if len(self._joint_ids) == 6
+            else (self.q, self.home)
+        )
+        bounds = (ranges[:, 0] + 1e-4, ranges[:, 1] - 1e-4)
+        results = [
+            least_squares(
+                residual,
+                np.clip(start, *bounds),
+                bounds=bounds,
+                max_nfev=100,
+                ftol=1e-8,
+                xtol=1e-8,
+                gtol=1e-8,
             )
-        return np.asarray(scratch.qpos[self._qpos_ids]).copy()
+            for start in starts
+        ]
+        evaluated = [
+            (candidate, float(np.linalg.norm(residual(candidate.x))))
+            for candidate in results
+        ]
+        best_task_error = min(task_error for _, task_error in evaluated)
+        acceptable_task_error = max(0.02, best_task_error + 0.002)
+        continuous_candidates = [
+            candidate
+            for candidate, task_error in evaluated
+            if task_error <= acceptable_task_error
+        ]
+        joint_span = np.maximum(ranges[:, 1] - ranges[:, 0], 1e-6)
+        result = min(
+            continuous_candidates,
+            key=lambda candidate: float(
+                np.linalg.norm((candidate.x - self.q) / joint_span)
+            ),
+        )
+        return np.asarray(result.x).copy()
 
     def _solve_pose_ik(
         self, scratch: mujoco.MjData, target: np.ndarray, target_rotation: np.ndarray

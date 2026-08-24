@@ -6,9 +6,9 @@ All notable changes to the project are recorded here.
 
 ### Added
 
-- Added `three_robot_spare_part_recovery`, a third symbolic and MuJoCo scenario with independent primary/spare parts, separate storage locations, generic object-specific manipulation, and a component-level installation goal.
+- Added `three_robot_component_installation`, a third symbolic and MuJoCo scenario with one task component, generic object-specific manipulation, and a component-level installation goal.
 - Added a deterministic real-world-style drop fault contract that applies a measured external force after successful primary-part placement in the handoff zone but before Go2/Z1 grasps it, requires placement/release/displacement/floor evidence, and stops the failed team in safe home postures.
-- Added `lmrbtp recovery-experiment`, which records a fault-only control and an adaptive trial, snapshots measured post-failure facts, requests a complete continuation BT through the OpenAI Responses API (`gpt-5.6-sol`, high reasoning, strict structured JSON), and rejects candidates that fail static validation, contract simulation, or spare-part recovery checks.
+- Added `lmrbtp recovery-experiment`, which records a fault-only control and an adaptive trial, snapshots measured post-failure facts, requests a complete continuation BT through the OpenAI Responses API (`gpt-5.6-sol`, high reasoning, strict structured JSON), and rejects candidates that fail static validation, contract simulation, or same-object floor-retrieval checks.
 - Added same-simulation continuation evidence covering `MjModel`/`MjData` identity, reset count, simulation time, and full dynamic-state hashes around replanning and through final physical completion.
 - Added three recovery video artifacts: failure-only, adaptive recovery with source/floor/route/destination angles, and a labeled side-by-side comparison that freezes the shorter control clip.
 - Added auditable recovery artifacts containing every LLM attempt, model/token provenance, adapted BT, unified BT diff, symbolic trace, physical events/goals, fault observation, object poses, continuity proof, and SHA-256 manifest.
@@ -16,7 +16,8 @@ All notable changes to the project are recorded here.
 - Added recovery planner, Responses payload, correction-loop, scene-composition, camera-program, and physical integration regression coverage.
 - Added `lmrbtp adaptive-demo`, a single real-OpenAI workflow that visibly generates and verifies a nominal BT, loads the hidden fault only after nominal acceptance, launches MuJoCo automatically, requests an LLM-authored replacement after measured failure, and resumes the same simulator state.
 - `adaptive-demo` now opens a paced, action-directed live MuJoCo viewer by default. The viewer remains responsive while recovery planning runs and displays a native failure/adaptation status overlay; `--headless` keeps the previous off-screen behavior.
-- Added a strict nominal-plan gate that requires `primary_part` handoff actions and rejects any preplanned `spare_part` branch, plus a checksummed fault-blindness evidence record containing the exact nominal prompt boundary.
+- Added a strict nominal-plan gate that requires `primary_part` handoff actions and rejects invented parts or a preplanned `recover_fallen_part` action, plus a checksummed fault-blindness evidence record proving that neither the fault nor the recovery affordance appeared in the nominal prompt.
+- Added post-failure runtime disclosure of the measured `source_floor` landing location and Go2/Z1's `recover_fallen_part` capability. The recovery LLM must retrieve the same usable `primary_part`; no duplicate object or backup bin exists in the symbolic or MuJoCo scene.
 - Added live timestamped console/file progress with heartbeats during both LLM calls, machine-readable events, returned-model/response/token provenance for nominal OpenAI generation, and an in-video failure-handling status layer that records represented wall time without advancing MuJoCo time.
 - Tightened mobile-navigation completion so its physical Action cannot report success until residual base motion has settled and the declared measured docking effect is true, allowing an unchanged LLM tree to verify that postcondition reliably.
 

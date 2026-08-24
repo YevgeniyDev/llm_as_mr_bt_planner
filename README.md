@@ -56,7 +56,7 @@ The repository provides:
 
 - [Collaborative packing and room-delivery scenario](examples/three_robot_packaging_delivery.json) and its [committed reference BT](examples/three_robot_packaging_delivery.bt.json)
 - [Courier scenario](examples/three_robot_courier.json) and its [committed reference BT](examples/three_robot_courier.bt.json)
-- [Spare-part recovery scenario](examples/three_robot_spare_part_recovery.json), [nominal BT](examples/three_robot_spare_part_recovery.bt.json), [fault contract](examples/three_robot_spare_part_recovery.fault.json), and [offline recovery test oracle](examples/three_robot_spare_part_recovery.expected_recovery.bt.json)
+- [Single-component installation scenario](examples/three_robot_component_installation.json), [nominal BT](examples/three_robot_component_installation.bt.json), [fault contract](examples/three_robot_component_installation.fault.json), and [offline fallen-part recovery oracle](examples/three_robot_component_installation.expected_recovery.bt.json)
 - [Blank template](templates/three_robot_scenario.template.json)
 - [JSON Schema](schemas/scenario.schema.json)
 
@@ -277,20 +277,23 @@ planner:
 1. It sends only the nominal scenario to `gpt-5.6-sol`, prints percentage progress and
    five-second heartbeats, and accepts the generated BT only after static validation and
    contract simulation. A semantic gate requires the nominal tree to use `primary_part` and
-   rejects any tree that mentions `spare_part`, including a preplanned fallback.
+   rejects invented parts or any preplanned `recover_fallen_part` action.
 2. Only after that BT is accepted does the process read the fault specification. It then
-   launches MuJoCo automatically with both the orange primary part and blue spare part visible,
-   while nominal actions use only the primary part.
+   launches MuJoCo automatically with one orange `primary_part`. Neither a replacement object
+   nor a visible floor-recovery target exists in the nominal planning input.
 3. Panda A places and releases the primary part in `source_cradle`. The configured force is
    applied after that measured successful placement and before Go2/Z1 grasps it, causing the
    part to fall to the floor and the nominal pick to fail.
 4. The robots safely stop and the MuJoCo clock/state remain frozen. The measured failure
-   snapshot and failed nominal BT are sent to the LLM, with live correction/validation progress.
+   snapshot reports that the same intact object is usable at `source_floor`; that snapshot and
+   the failed nominal BT are sent to the LLM, with live correction/validation progress. Only at
+   this boundary is Go2/Z1's `recover_fallen_part(primary_part,source_floor)` capability added to
+   the runtime planning contract, so the nominal LLM cannot know the failure in advance.
    The final video inserts a dark `FAILURE DETECTED / LLM IS ADAPTING THE BEHAVIOR TREE`
    status layer whose metadata records the real API wait time.
-5. Once the replacement BT passes validation, contract simulation, and spare-part checks, the
-   exact same `MjModel` and `MjData` resume without a reset. The robots retrieve the initially
-   visible spare, complete the handoff and installation, and the recorder switches among
+5. Once the adapted BT passes validation, contract simulation, and same-object recovery checks,
+   the exact same `MjModel` and `MjData` resume without a reset. Go2/Z1 retrieves the fallen
+   `primary_part`, completes the handoff and installation, and the recorder switches among
    overview, source/failure, route, and destination angles according to the active action.
 
 The timestamped output directory contains `adaptive_demo.mp4`, clear text and JSON event logs,
@@ -314,9 +317,9 @@ with `gpt-5.6-sol`, high reasoning effort, and a strict JSON schema by default. 
 independently initialized trials with the same deterministic scene and fault trigger:
 
 1. The fault-only control executes the valid nominal BT through Panda A's successful placement in `source_cradle`. After the part is measured in the handoff zone and released, but before Go2/Z1 establishes a grasp, a declared external force pushes `primary_part` from the cradle. The part falls to the floor, Go2's measured pick fails, and all robots enter a safe stopped/home state.
-2. The adaptive trial repeats the same fault. From its measured safe-stop snapshot, the LLM returns a complete continuation BT for all three robots. The candidate must pass static validation, use `spare_part` rather than the unavailable primary part, and reach all goals in contract simulation before physical execution resumes.
+2. The adaptive trial repeats the same fault. From its measured safe-stop snapshot, the LLM returns a complete continuation BT for all three robots. The candidate must pass static validation, retrieve the usable `primary_part` from its measured `source_floor` location, avoid inventing replacement objects, and reach all goals in contract simulation before physical execution resumes.
 
-The adaptive trial does not rebuild or reset MuJoCo after the fault. The same `MjModel`, `MjData`, controller instances, object poses, simulation clock, and reset counter continue through replanning and final spare-part installation. The report records state hashes immediately before and after the API call and verifies that the reset counter remains unchanged through completion. The LLM call consumes wall time but deliberately does not advance simulation time. Its adaptive video also includes the failure-handling status layer.
+The adaptive trial does not rebuild or reset MuJoCo after the fault. The same `MjModel`, `MjData`, controller instances, fallen-object pose, simulation clock, and reset counter continue through replanning, floor retrieval, and final installation of that same object. The report records state hashes immediately before and after the API call and verifies that the reset counter remains unchanged through completion. The LLM call consumes wall time but deliberately does not advance simulation time. Its adaptive video also includes the failure-handling status layer.
 
 Every run creates a timestamped evidence directory containing:
 
@@ -339,13 +342,13 @@ On a displayless Linux host, select an off-screen OpenGL backend before importin
 
 The command statically validates the BT first, composes one MuJoCo world, settles all three robots, and then ticks the exact hierarchical trees concurrently. It prints condition/action/resource progress and writes `physical_execution_report.json` under `outputs/mujoco/`. An unrecovered failure returns a nonzero exit code and identifies the robot, node, failed measured predicate, controller stage, or timeout; recovered Action failures remain visible in the successful report.
 
-The adapter deliberately supports only `three_robot_courier`, `three_robot_packaging_delivery`, and `three_robot_spare_part_recovery`; it rejects any other task rather than silently mapping it to a known scene. It executes `Sequence` and `Fallback` control flow hierarchically. A generated tree that uses an unsupported physical composite or action can still pass symbolic checks, but MuJoCo rejects it with the exact unsupported node instead of flattening or rewriting it.
+The adapter deliberately supports only `three_robot_courier`, `three_robot_packaging_delivery`, and `three_robot_component_installation`; it rejects any other task rather than silently mapping it to a known scene. It executes `Sequence` and `Fallback` control flow hierarchically. A generated tree that uses an unsupported physical composite or action can still pass symbolic checks, but MuJoCo rejects it with the exact unsupported node instead of flattening or rewriting it.
 
-All three scenes contain two independently prefixed 7-DoF Panda models and one Go2 with the Z1 gripper model mounted on its trunk. The courier and recovery scenes use separated workbenches; recovery adds independent primary and spare free bodies plus object-specific grasp and fixture constraints. The packing scene instead uses one shared assembly bench, opposed Panda mounting positions with collision-safe home poses, a separate room boundary and delivery pedestal, and a travel aisle through the doorway. Controller target sites are hidden and have no collision geometry.
+All three scenes contain two independently prefixed 7-DoF Panda models and one Go2 with the Z1 gripper model mounted on its trunk. The courier and component-installation scenes use separated workbenches; component installation adds one free `primary_part` plus object-specific grasp and fixture constraints. The packing scene instead uses one shared assembly bench, opposed Panda mounting positions with collision-safe home poses, a separate room boundary and delivery pedestal, and a travel aisle through the doorway. Controller target sites are hidden and have no collision geometry. The recovery-only `source_floor` site is invisible and has no collision geometry; it represents the diagnosed landing region rather than another scene object.
 
 The Go2 free-joint pose is initialized once and never written during execution, so measured displacement comes from leg torques, inertia, and floor contact. Z1 retains the payload in its closed grasp throughout each route and releases it only at the declared destination. Dynamic objects move through actuator-driven differential IK, grasp constraints, and a 12-motor alternating contact gait. Arm-link gravity compensation is enabled, as in the `mjctrl` example; the Go2, package parts, door, and other dynamic bodies remain under full gravity.
 
-The grasp model is explicit: each tabletop Panda follows pose-aware IK with a constrained vertical gripper orientation so its fingers approach from above. Z1 first reaches its measured open joint position, follows pose-aware IK to a side-grasp pose, and closes at a rate-limited command. The grasp is accepted only when the measured joint reaches its contact angle and MuJoCo reports payload contact on both dedicated opposing finger-pad geoms. A soft weld is then activated at the current relative pose to prevent numerical slippage without snapping or teleporting the payload. Navigation fails if that measured grasp constraint is lost. At the destination, Z1 opens to its measured joint limit before releasing the constraint and retreating. Final fixture installation uses the same visible constraint mechanism. This is a controlled-simulation approximation, not a claim that fingertip friction, perception, or grasp uncertainty has been validated.
+The grasp model is explicit: each tabletop Panda follows pose-aware IK with a constrained vertical gripper orientation so its fingers approach from above. Z1 first reaches its measured open joint position, follows pose-aware IK to a side-grasp pose, and closes at a rate-limited command. Normal Z1 handoffs require the measured joint to reach its contact angle and MuJoCo to report payload contact on both dedicated opposing finger-pad geoms. Ground-supported fallen-part retrieval instead requires a closed gripper, actual Z1/object contact, and tool/object proximity below 6 cm because the floor can prevent an opposing-pad pinch. A soft weld is then activated at the current relative pose to prevent numerical slippage without snapping or teleporting the payload. Navigation fails if that measured grasp constraint is lost. At the destination, Z1 opens to its measured joint limit before releasing the constraint and retreating. Final fixture installation uses the same visible constraint mechanism. This is a controlled-simulation approximation, not a claim that fingertip friction, perception, or grasp uncertainty has been validated.
 
 After either Panda completes its collaborative step, it retreats and returns to its home joint configuration before its BT action succeeds and the shared zone is released. This prevents the next robot from entering while a Franka remains extended over the work area.
 
@@ -375,7 +378,7 @@ The planner genuinely verifies the declared symbolic contract:
 - wait/resource cycles, timeouts, leaks, and cancellation cleanup;
 - symbolic state invariants and final goals.
 
-The separate MuJoCo adapter tests the three bundled BTs against fixed dynamic scenes: hierarchical branch selection, actuator limits, gravity, contacts, reachable Cartesian motion, collaborative assembly, payload transfer, base stability, docking, contact-driven Go2 displacement, hinged-door opening, room delivery, deterministic part loss, and same-state spare-part recovery. Its report is evidence for that exact model, controller configuration, fault contract, and initial state only. It does **not** establish general collision avoidance, perception accuracy, diagnosis from real sensors, ROS 2 integration, sim-to-real validity, or physical-robot safety. XML remains an export format rather than a hardware controller.
+The separate MuJoCo adapter tests the three bundled BTs against fixed dynamic scenes: hierarchical branch selection, actuator limits, gravity, contacts, reachable Cartesian motion, collaborative assembly, payload transfer, base stability, docking, contact-driven Go2 displacement, hinged-door opening, room delivery, deterministic part loss, and same-state fallen-object retrieval. Its report is evidence for that exact model, controller configuration, fault contract, and initial state only. It does **not** establish general collision avoidance, perception accuracy, diagnosis from real sensors, ROS 2 integration, sim-to-real validity, or physical-robot safety. XML remains an export format rather than a hardware controller.
 
 ## Development checks
 
@@ -387,7 +390,7 @@ python -m pytest -q
 $env:LMRBTP_RUN_MUJOCO_E2E = "1"
 python -m pytest tests/test_mujoco_sim.py -q
 $env:LMRBTP_RUN_MUJOCO_RECOVERY_E2E = "1"
-python -m pytest tests/test_mujoco_sim.py -q -k spare_part_recovery
+python -m pytest tests/test_mujoco_sim.py -q -k fallen_part_recovery
 python -m llm_mr_bt_planner doctor
 ```
 

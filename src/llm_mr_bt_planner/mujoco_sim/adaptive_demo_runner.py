@@ -157,7 +157,8 @@ def _execute_demo(
     save_json(output_dir / "nominal_provider_responses.json", list(outcome.planner_result.provider_responses))
     logger.event(
         "PHASE 1/5",
-        "Nominal BT accepted: it operates on primary_part and contains no spare_part branch.",
+        "Nominal BT accepted: it uses only the normal primary_part handoff and contains no "
+        "failure-recovery action.",
     )
 
     nominal_completed = time.perf_counter()
@@ -190,11 +191,10 @@ def _execute_demo(
     logger.event(
         "PHASE 2/5",
         (
-            "Starting headless MuJoCo; primary_part and spare_part are both present initially."
+            "Starting headless MuJoCo with the single primary_part."
             if args.headless
             else (
-                "Opening the live MuJoCo window automatically; primary_part and spare_part "
-                "are both visible initially."
+                "Opening the live MuJoCo window automatically with the single primary_part."
             )
         ),
     )
@@ -214,7 +214,8 @@ def _execute_demo(
     ) -> tuple[PhysicalExecutor, dict[str, Any]]:
         logger.event(
             "PHASE 3/5",
-            f"Unexpected {observation['classification']} detected for {observation['object']}.",
+            f"Unexpected {observation['classification']} detected for {observation['object']}; "
+            f"the measured object is usable at {observation['recovery_location']}.",
         )
         logger.event(
             "PHASE 4/5",
@@ -328,7 +329,7 @@ def _execute_demo(
         "workflow": [
             "fault-blind nominal LLM generation",
             "independent BT validation and contract simulation",
-            "automatic MuJoCo execution with initially visible spare inventory",
+            "automatic single-object MuJoCo execution",
             "post-placement physical fault and safe stop",
             "failure-informed LLM BT adaptation",
             "same-state MuJoCo continuation with action-directed cameras",
@@ -427,7 +428,7 @@ def _heartbeat(
 
 
 def validate_nominal_primary_only(plan: Plan) -> list[dict[str, Any]]:
-    """Reject pre-adapted/fallback plans so the initial LLM cannot consume the spare."""
+    """Reject pre-adapted plans so nominal generation remains fault-blind."""
     actions: list[dict[str, Any]] = []
     all_parameters: list[str] = []
     for robot, tree in plan.behavior_trees.items():
@@ -437,10 +438,15 @@ def validate_nominal_primary_only(plan: Plan) -> list[dict[str, Any]]:
                 actions.append(
                     {"robot": robot, "action": node.name, "parameters": list(node.parameters)}
                 )
+    recovery_actions = [item for item in actions if item["action"] == "recover_fallen_part"]
     if "spare_part" in all_parameters:
         raise ValueError(
-            "Nominal LLM BT mentions spare_part. The initial tree must remain nominal and "
-            "must not contain a preplanned recovery branch."
+            "Nominal LLM BT invents spare_part, which is not present in this scenario."
+        )
+    if recovery_actions:
+        raise ValueError(
+            "Nominal LLM BT contains recover_fallen_part before any failure was observed. "
+            "The initial tree must remain fault-blind."
         )
     if "primary_part" not in all_parameters:
         raise ValueError("Nominal LLM BT does not operate on primary_part.")
@@ -467,9 +473,17 @@ def _fault_blindness_evidence(
     fault_loaded: float,
 ) -> dict[str, Any]:
     prompt_contains_fault_id = fault_id in nominal_user_prompt
+    prompt_contains_recovery_affordance = any(
+        marker in nominal_user_prompt
+        for marker in ("recover_fallen_part", "source_floor")
+    )
     loaded_after = fault_loaded >= nominal_completed
     return {
-        "boundary_verified": loaded_after and not prompt_contains_fault_id,
+        "boundary_verified": (
+            loaded_after
+            and not prompt_contains_fault_id
+            and not prompt_contains_recovery_affordance
+        ),
         "fault_disclosed_to_nominal_llm": False,
         "fault_configuration_loaded_after_nominal_bt_accepted": loaded_after,
         "nominal_request_inputs": ["nominal system prompt", "scenario document"],
@@ -482,6 +496,9 @@ def _fault_blindness_evidence(
         "nominal_system_request_sha256": _sha256_text(SYSTEM_PROMPT),
         "fault_specification_sha256": _sha256_file(fault_path),
         "fault_id_present_in_nominal_prompt": prompt_contains_fault_id,
+        "recovery_affordance_present_in_nominal_prompt": (
+            prompt_contains_recovery_affordance
+        ),
         "nominal_actions": nominal_actions,
     }
 

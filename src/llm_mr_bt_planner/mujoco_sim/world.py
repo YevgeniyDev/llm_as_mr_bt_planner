@@ -16,7 +16,7 @@ DOCK_Y = 0.54
 ROOM_ROUTE_Y = 0.76
 PAYLOAD_HALF_SIZE = 0.020
 PACKAGE_LID_HALF_SIZE = np.array([0.018, 0.018, 0.006])
-RECOVERY_TASK_ID = "three_robot_spare_part_recovery"
+RECOVERY_TASK_ID = "three_robot_component_installation"
 WORKBENCH_TOP_Z = 0.490
 PANDA_MOUNT_Z = 0.502
 
@@ -47,11 +47,11 @@ PACKAGING_STATION_POSES: dict[str, np.ndarray] = {
 
 RECOVERY_STATION_POSES: dict[str, np.ndarray] = {
     "primary_bin": np.array([-0.18, -0.48, 0.510]),
-    "backup_bin": np.array([0.26, -0.48, 0.510]),
     "source_cradle": np.array([0.00, 0.15, 0.550]),
     "destination_cradle": np.array([3.00, 0.15, 0.550]),
     "target_fixture": np.array([3.00, -0.48, 0.510]),
 }
+RECOVERY_FLOOR_POSE = np.array([-0.04, 0.38, PAYLOAD_HALF_SIZE])
 
 STATION_PAD_HALF_EXTENTS: dict[str, np.ndarray] = {
     "source_bin": np.array([0.085, 0.075, 0.008]),
@@ -69,7 +69,6 @@ PACKAGING_STATION_PAD_HALF_EXTENTS: dict[str, np.ndarray] = {
 
 RECOVERY_STATION_PAD_HALF_EXTENTS: dict[str, np.ndarray] = {
     "primary_bin": np.array([0.085, 0.075, 0.008]),
-    "backup_bin": np.array([0.085, 0.075, 0.008]),
     "source_cradle": np.array([0.085, 0.075, 0.028]),
     "destination_cradle": np.array([0.10, 0.085, 0.028]),
     "target_fixture": np.array([0.085, 0.075, 0.012]),
@@ -179,7 +178,7 @@ class CourierWorld:
         _attach_panda(spec, assets, "franka_b_", mount_poses["franka_b"].tolist(), np.pi)
 
         if recovery:
-            for object_name in ("primary_part", "spare_part"):
+            for object_name in ("primary_part",):
                 _add_weld(
                     spec,
                     f"grip_franka_a_{object_name}",
@@ -219,7 +218,7 @@ class CourierWorld:
         data = mujoco.MjData(model)
         grip_equalities = {}
         if recovery:
-            for object_name in ("primary_part", "spare_part"):
+            for object_name in ("primary_part",):
                 for robot in ("franka_a", "unitree_go2_z1", "franka_b"):
                     grip_equalities[f"{robot}:{object_name}"] = model.equality(
                         f"grip_{robot}_{object_name}"
@@ -244,10 +243,7 @@ class CourierWorld:
             grip_equalities["target_fixture"] = model.equality("install_fixture").id
 
         object_body_ids = (
-            {
-                "primary_part": model.body("primary_part").id,
-                "spare_part": model.body("spare_part").id,
-            }
+            {"primary_part": model.body("primary_part").id}
             if recovery
             else {"payload": model.body("payload").id}
         )
@@ -257,7 +253,13 @@ class CourierWorld:
         world = cls(
             model=model,
             data=data,
-            station_sites={name: model.site(f"station_{name}").id for name in station_poses},
+            station_sites={
+                name: model.site(f"station_{name}").id
+                for name in (
+                    *station_poses,
+                    *(("source_floor",) if recovery else ()),
+                )
+            },
             grip_equalities=grip_equalities,
             z1_finger_pad_geoms={
                 side: frozenset(
@@ -331,7 +333,6 @@ class CourierWorld:
         )
         if self.task_id == RECOVERY_TASK_ID:
             self._set_free_body_pose("primary_part", poses["primary_bin"])
-            self._set_free_body_pose("spare_part", poses["backup_bin"])
             self.active_payload_name = "primary_part"
         else:
             self._set_free_body_pose("payload", poses[self.source_location])
@@ -588,7 +589,6 @@ def _add_recovery_scene(spec: mujoco.MjSpec) -> None:
     )
     colors = {
         "primary_bin": [0.78, 0.42, 0.12, 1.0],
-        "backup_bin": [0.18, 0.48, 0.82, 1.0],
         "source_cradle": [0.15, 0.48, 0.42, 1.0],
         "destination_cradle": [0.16, 0.62, 0.30, 1.0],
         "target_fixture": [0.68, 0.16, 0.18, 1.0],
@@ -605,11 +605,14 @@ def _add_recovery_scene(spec: mujoco.MjSpec) -> None:
         name="primary_part",
         color=[0.95, 0.52, 0.10, 1.0],
     )
-    _add_payload(
-        spec,
-        RECOVERY_STATION_POSES["backup_bin"],
-        name="spare_part",
-        color=[0.12, 0.56, 0.95, 1.0],
+    floor_location = spec.worldbody.add_body(
+        name="source_floor_location",
+        pos=RECOVERY_FLOOR_POSE,
+    )
+    floor_location.add_site(
+        name="station_source_floor",
+        size=[0.006],
+        rgba=[1.0, 0.9, 0.1, 0.0],
     )
 
 

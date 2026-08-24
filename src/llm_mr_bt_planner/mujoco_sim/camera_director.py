@@ -53,12 +53,13 @@ CAMERA_PROGRAMS: dict[str, CameraProgram] = {
             "stow_after_delivery": "packaging_delivery",
         },
     ),
-    "three_robot_spare_part_recovery": CameraProgram(
+    "three_robot_component_installation": CameraProgram(
         fallback="overview",
         action_cameras={
             "pick_source_part": "recovery_source",
             "place_source_cradle": "recovery_source",
             "pick_source_cradle": "recovery_source",
+            "recover_fallen_part": "recovery_floor",
             "navigate_destination": "recovery_route",
             "place_destination_cradle": "recovery_destination",
             "stow_arm_destination": "recovery_destination",

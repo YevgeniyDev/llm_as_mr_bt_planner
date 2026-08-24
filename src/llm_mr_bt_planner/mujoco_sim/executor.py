@@ -462,9 +462,10 @@ class PhysicalExecutor:
             self._leave(cursor, node)
             return Status.FAILURE
         elif self._elapsed(cursor, node) > capability.timeout_ticks:
+            action_diagnostic = cursor.action.diagnostic_detail()
             cursor.last_failure = (
                 f"Physical action {cursor.robot}/{node.label()} exceeded its {capability.timeout_ticks}s timeout; "
-                f"last stage: {cursor.action.stage}."
+                f"last stage: {cursor.action.stage}; {action_diagnostic}."
             )
             self._event(
                 cursor.robot,
@@ -667,7 +668,7 @@ class PhysicalAction:
             "pick_package_lid": "lid_supply",
             "pick_sealed_parcel": "packing_station",
         }
-        if self.name == "pick_source_part":
+        if self.name in {"pick_source_part", "recover_fallen_part"}:
             return self._pick(self.parameters[1], dt)
         if self.name in pick_locations:
             return self._pick(pick_locations[self.name], dt)
@@ -707,9 +708,11 @@ class PhysicalAction:
         object_position = self.world.object_position(self.object_name)
         if self.pick_origin is None:
             self.pick_origin = object_position.copy()
-        grasp_target = (
-            object_position if self.stage in {"descend", "close"} else self.pick_origin
+        track_live_object = (
+            self.name != "recover_fallen_part"
+            and self.stage in {"descend", "close"}
         )
+        grasp_target = object_position if track_live_object else self.pick_origin
         if self.stage == "start":
             if self.name == "pick_sealed_parcel" and not self.world.equality_active(
                 "package_seal"
@@ -724,13 +727,25 @@ class PhysicalAction:
             elif self._elapsed() > 1.5:
                 return "FAILURE", "gripper did not reach its measured open position"
         elif self.stage == "prealign":
-            prealign_target = grasp_target + [0, 0.10, 0.10]
+            prealign_target = (
+                self.pick_origin + [0.0, 0.0, 0.15]
+                if self.name == "recover_fallen_part"
+                else grasp_target + [0, 0.10, 0.10]
+            )
             self._move_tool(prealign_target, dt)
             if self.arm.tool_pose_reached(
                 prealign_target,
-                target_rotation=Z1_GRASP_ROTATION,
-                position_tolerance=0.025,
-                rotation_tolerance=0.20,
+                target_rotation=(
+                    None
+                    if self.name == "recover_fallen_part"
+                    else Z1_GRASP_ROTATION
+                ),
+                position_tolerance=(
+                    0.075 if self.name == "recover_fallen_part" else 0.025
+                ),
+                rotation_tolerance=(
+                    1.0 if self.name == "recover_fallen_part" else 0.20
+                ),
             ):
                 self._next("descend")
         elif self.stage == "approach":
@@ -748,9 +763,17 @@ class PhysicalAction:
             ready_to_close = (
                 self.arm.tool_pose_reached(
                     grasp_target,
-                    target_rotation=Z1_GRASP_ROTATION,
-                    position_tolerance=0.020,
-                    rotation_tolerance=0.12,
+                    target_rotation=(
+                        None
+                        if self.name == "recover_fallen_part"
+                        else Z1_GRASP_ROTATION
+                    ),
+                    position_tolerance=(
+                        0.075 if self.name == "recover_fallen_part" else 0.020
+                    ),
+                    rotation_tolerance=(
+                        0.25 if self.name == "recover_fallen_part" else 0.12
+                    ),
                 )
                 if self.robot == "unitree_go2_z1"
                 else reached or distance < 0.052
@@ -766,12 +789,17 @@ class PhysicalAction:
             z1_pinch = self.world.object_contact_with_z1_finger_pad(
                 self.object_name, "fixed"
             ) and self.world.object_contact_with_z1_finger_pad(self.object_name, "moving")
+            floor_contact_grasp = bool(
+                self.name == "recover_fallen_part"
+                and contact
+                and distance < 0.060
+            )
             proximity_limit = 0.060 if self.robot == "unitree_go2_z1" else 0.032
             if (
                 self._elapsed() > 0.35
                 and distance < (0.10 if self.robot == "unitree_go2_z1" else 0.045)
                 and (
-                    z1_pinch
+                    z1_pinch or floor_contact_grasp
                     if self.robot == "unitree_go2_z1"
                     else contact or distance < proximity_limit
                 )
@@ -795,7 +823,9 @@ class PhysicalAction:
         elif self.stage == "lift":
             assert self.pick_origin is not None
             lift_offset = (
-                np.array([0.0, 0.06, 0.07])
+                np.array([0.0, 0.06, 0.16])
+                if self.name == "recover_fallen_part"
+                else np.array([0.0, 0.06, 0.07])
                 if self.robot == "unitree_go2_z1"
                 else np.array([0.0, 0.0, 0.12])
             )
@@ -806,8 +836,15 @@ class PhysicalAction:
             if self.world.equality_active(self.grip_key) and lift_height > 0.05 and (
                 reached or self.robot == "unitree_go2_z1"
             ):
+                qualification = (
+                    "ground-supported contact/proximity-qualified"
+                    if self.name == "recover_fallen_part"
+                    else "opposing-pad contact-qualified"
+                    if self.robot == "unitree_go2_z1"
+                    else "contact-qualified"
+                )
                 return "SUCCESS", (
-                    f"contact-qualified {self.object_id} grasp remained constrained during lift"
+                    f"{qualification} {self.object_id} grasp remained constrained during lift"
                 )
         return "RUNNING", self.stage
 
@@ -933,11 +970,18 @@ class PhysicalAction:
     def _move_tool(self, target: np.ndarray, dt: float) -> bool:
         assert self.arm is not None
         rotation = (
-            Z1_GRASP_ROTATION
+            None
+            if self.name == "recover_fallen_part"
+            else Z1_GRASP_ROTATION
             if self.robot == "unitree_go2_z1"
             else PANDA_GRASP_ROTATIONS.get(self.robot)
         )
-        return self.arm.move_tool(target, dt, target_rotation=rotation)
+        return self.arm.move_tool(
+            target,
+            dt * (0.35 if self.name == "recover_fallen_part" else 1.0),
+            target_rotation=rotation,
+            track_mobile_base=self.name != "recover_fallen_part",
+        )
 
     def _navigate(self, dt: float) -> tuple[str, str]:
         assert self.arm is not None
@@ -1023,3 +1067,13 @@ class PhysicalAction:
 
     def _elapsed(self) -> float:
         return float(self.world.data.time) - self.stage_started
+
+    def diagnostic_detail(self) -> str:
+        """Return measured geometry that makes controller timeouts actionable."""
+        object_position = self.world.object_position(self.object_name)
+        tool_position = self.arm.tool_position if self.arm is not None else np.zeros(3)
+        target = self.pick_origin if self.pick_origin is not None else object_position
+        return (
+            f"tool-to-object={np.linalg.norm(tool_position - object_position):.3f}m, "
+            f"tool-to-target={np.linalg.norm(tool_position - target):.3f}m"
+        )

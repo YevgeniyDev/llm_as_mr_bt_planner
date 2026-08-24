@@ -172,6 +172,13 @@ class DeterministicFaultInjector:
             float(np.linalg.norm(position - self.origin)) if self.origin is not None else 0.0
         )
         on_floor = bool(position[2] <= self.spec.floor_height_threshold_m)
+        at_recovery_location = bool(
+            "source_floor" in executor.world.station_sites
+            and executor.observe_literal(
+                f"at({self.spec.trigger.object},source_floor)"
+            )
+        )
+        object_usable = bool(self.spec.recoverable and on_floor and at_recovery_location)
         classification = (
             "dropped_to_floor"
             if on_floor
@@ -185,7 +192,11 @@ class DeterministicFaultInjector:
             "classification": classification,
             "recoverable": self.spec.recoverable,
             "object": self.spec.trigger.object,
-            "object_usable": False,
+            "object_usable": object_usable,
+            "recovery_location": "source_floor" if at_recovery_location else None,
+            "recovery_strategy": (
+                "retrieve_same_object_from_floor" if object_usable else "no_verified_strategy"
+            ),
             "trigger_time_seconds": self.trigger_time,
             "force_cleared_time_seconds": self.clear_time,
             "seed": self.spec.seed,
@@ -194,6 +205,7 @@ class DeterministicFaultInjector:
             "displacement_m": round(displacement, 6),
             "minimum_displacement_m": self.spec.minimum_displacement_m,
             "on_floor": on_floor,
+            "at_recovery_location": at_recovery_location,
             "floor_height_threshold_m": self.spec.floor_height_threshold_m,
             "nominal_bt_failure": executor.failed_reason,
         }

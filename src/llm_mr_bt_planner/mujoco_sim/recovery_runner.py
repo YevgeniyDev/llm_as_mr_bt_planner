@@ -46,13 +46,13 @@ from .recording import (
 from .runner import _check_adapter_scope
 from .world import RECOVERY_TASK_ID, CourierWorld
 
-DEFAULT_RECOVERY_SCENARIO = PROJECT_ROOT / "examples" / "three_robot_spare_part_recovery.json"
-DEFAULT_RECOVERY_BT = PROJECT_ROOT / "examples" / "three_robot_spare_part_recovery.bt.json"
+DEFAULT_RECOVERY_SCENARIO = PROJECT_ROOT / "examples" / "three_robot_component_installation.json"
+DEFAULT_RECOVERY_BT = PROJECT_ROOT / "examples" / "three_robot_component_installation.bt.json"
 DEFAULT_RECOVERY_FAULT = (
-    PROJECT_ROOT / "examples" / "three_robot_spare_part_recovery.fault.json"
+    PROJECT_ROOT / "examples" / "three_robot_component_installation.fault.json"
 )
 DEFAULT_RECOVERY_ORACLE = (
-    PROJECT_ROOT / "examples" / "three_robot_spare_part_recovery.expected_recovery.bt.json"
+    PROJECT_ROOT / "examples" / "three_robot_component_installation.expected_recovery.bt.json"
 )
 
 
@@ -373,7 +373,11 @@ def _run_fault_trial(
             raise RuntimeError(
                 "Fault injection did not establish the required measured displacement."
             )
-        measured_facts = _measured_recovery_facts(executor)
+        if observation["object_usable"]:
+            executor._add_signal(f"usable({observation['object']})")
+        else:
+            executor._discard_signal(f"usable({observation['object']})")
+        measured_facts = _measured_recovery_facts(executor, observation)
         snapshot = _world_snapshot(executor, measured_facts, observation)
 
         if continue_after_failure is None:
@@ -413,8 +417,9 @@ def _run_fault_trial(
                 camera="recovery_floor",
                 title="FAILURE DETECTED - BT ADAPTATION IN PROGRESS",
                 message=(
-                    f"{observation['classification']}: {observation['object']} unavailable\n"
-                    "The LLM is generating and validating a recovery tree"
+                    f"{observation['classification']}: {observation['object']} at "
+                    f"{observation['recovery_location']}\n"
+                    "The LLM is generating and validating a retrieval tree"
                 ),
             )
         if open_recorder is not None:
@@ -429,8 +434,9 @@ def _run_fault_trial(
                     else "DRY-RUN RECOVERY PLANNER IS ADAPTING THE TREE..."
                 ),
                 detail=(
-                    f"{observation['classification']}: {observation['object']} became unavailable. "
-                    "The robots are safely stopped while a validated continuation is prepared."
+                    f"{observation['classification']}: {observation['object']} is intact at "
+                    f"{observation['recovery_location']}. The robots are safely stopped while "
+                    "a validated retrieval continuation is prepared."
                 ),
                 duration_seconds=min(max(replanning_wall_seconds, 3.0), 15.0),
                 wall_seconds=replanning_wall_seconds,
@@ -582,14 +588,17 @@ def _safe_stop(
         raise RuntimeError("Robots did not reach their safe home postures after the fault.")
 
 
-def _measured_recovery_facts(executor: PhysicalExecutor) -> tuple[str, ...]:
+def _measured_recovery_facts(
+    executor: PhysicalExecutor,
+    observation: dict[str, Any],
+) -> tuple[str, ...]:
     candidates = [
         "system_ready()",
         "robot_ready(franka_a)",
         "robot_ready(unitree_go2_z1)",
         "robot_ready(franka_b)",
-        "usable(spare_part)",
-        "at(spare_part,backup_bin)",
+        "usable(primary_part)",
+        "at(primary_part,source_floor)",
         "gripper_empty(franka_a)",
         "gripper_empty(unitree_go2_z1)",
         "gripper_empty(franka_b)",
@@ -600,8 +609,8 @@ def _measured_recovery_facts(executor: PhysicalExecutor) -> tuple[str, ...]:
     ]
     facts = tuple(literal for literal in candidates if executor.observe_literal(literal))
     required = {
-        "usable(spare_part)",
-        "at(spare_part,backup_bin)",
+        "usable(primary_part)",
+        "at(primary_part,source_floor)",
         "gripper_empty(franka_a)",
         "gripper_empty(unitree_go2_z1)",
         "gripper_empty(franka_b)",
@@ -611,7 +620,12 @@ def _measured_recovery_facts(executor: PhysicalExecutor) -> tuple[str, ...]:
     }
     missing = sorted(required - set(facts))
     if missing:
-        raise RuntimeError(f"Safe recovery snapshot is missing measured facts: {', '.join(missing)}")
+        raise RuntimeError(
+            "Safe same-object recovery snapshot is missing measured facts: "
+            f"{', '.join(missing)}. Observation: "
+            f"usable={observation.get('object_usable')}, "
+            f"location={observation.get('recovery_location')}."
+        )
     return facts
 
 
@@ -786,7 +800,7 @@ def _validate_args(args: Namespace) -> None:
 
 def _new_experiment_directory(root: Path) -> Path:
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
-    directory = root.resolve() / f"spare-part-recovery-{stamp}"
+    directory = root.resolve() / f"fallen-part-recovery-{stamp}"
     directory.mkdir(parents=True, exist_ok=False)
     return directory
 

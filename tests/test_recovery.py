@@ -17,11 +17,11 @@ from llm_mr_bt_planner.recovery import (
     recovery_plan_json_schema,
 )
 
-SCENARIO_PATH = PROJECT_ROOT / "examples" / "three_robot_spare_part_recovery.json"
-NOMINAL_PATH = PROJECT_ROOT / "examples" / "three_robot_spare_part_recovery.bt.json"
-FAULT_PATH = PROJECT_ROOT / "examples" / "three_robot_spare_part_recovery.fault.json"
+SCENARIO_PATH = PROJECT_ROOT / "examples" / "three_robot_component_installation.json"
+NOMINAL_PATH = PROJECT_ROOT / "examples" / "three_robot_component_installation.bt.json"
+FAULT_PATH = PROJECT_ROOT / "examples" / "three_robot_component_installation.fault.json"
 ORACLE_PATH = (
-    PROJECT_ROOT / "examples" / "three_robot_spare_part_recovery.expected_recovery.bt.json"
+    PROJECT_ROOT / "examples" / "three_robot_component_installation.expected_recovery.bt.json"
 )
 
 
@@ -31,8 +31,8 @@ def _measured_facts() -> tuple[str, ...]:
         "robot_ready(franka_a)",
         "robot_ready(unitree_go2_z1)",
         "robot_ready(franka_b)",
-        "usable(spare_part)",
-        "at(spare_part,backup_bin)",
+        "usable(primary_part)",
+        "at(primary_part,source_floor)",
         "gripper_empty(franka_a)",
         "gripper_empty(unitree_go2_z1)",
         "gripper_empty(franka_b)",
@@ -40,6 +40,16 @@ def _measured_facts() -> tuple[str, ...]:
         "base_stationary(unitree_go2_z1)",
         "docked(unitree_go2_z1,source_dock)",
     )
+
+
+def _failure_observation() -> dict[str, object]:
+    return {
+        "classification": "dropped_to_floor",
+        "object": "primary_part",
+        "object_usable": True,
+        "recovery_location": "source_floor",
+        "position_m": [-0.04, 0.38, 0.02],
+    }
 
 
 def test_bundled_oracle_is_a_valid_continuation_from_the_failure_snapshot():
@@ -50,7 +60,7 @@ def test_bundled_oracle_is_a_valid_continuation_from_the_failure_snapshot():
         OracleRecoveryClient(ORACLE_PATH),
         scenario,
         measured_initial_state=_measured_facts(),
-        failure_observation={"classification": "dropped_to_floor"},
+        failure_observation=_failure_observation(),
         nominal_plan=nominal,
     )
 
@@ -58,8 +68,12 @@ def test_bundled_oracle_is_a_valid_continuation_from_the_failure_snapshot():
     assert result.validation.valid
     assert result.simulation.success
     assert len(result.attempts) == 1
-    assert "usable(primary_part)" not in result.runtime_scenario.initial_state
-    assert "at(primary_part, primary_bin)" not in result.runtime_scenario.initial_state
+    assert "usable(primary_part)" in result.runtime_scenario.initial_state
+    assert "at(primary_part, source_floor)" in result.runtime_scenario.initial_state
+    assert result.runtime_scenario.capability(
+        "unitree_go2_z1", "recover_fallen_part"
+    ) is not None
+    assert "spare_part" not in result.runtime_scenario.constants
     assert "installed_component(target_fixture)" in result.simulation.final_state
 
 
@@ -79,7 +93,7 @@ def test_recovery_planner_retries_a_rejected_candidate_then_accepts_replacement(
             if self.calls == 1:
                 return {
                     "schema_version": "2.0",
-                    "mission_id": "three_robot_spare_part_recovery",
+                    "mission_id": "three_robot_component_installation",
                     "behavior_trees": {},
                 }, {"attempt": 1}
             assert "previous recovery candidate was rejected" in user
@@ -91,7 +105,7 @@ def test_recovery_planner_retries_a_rejected_candidate_then_accepts_replacement(
         client,
         load_scenario(SCENARIO_PATH, strict=True),
         measured_initial_state=_measured_facts(),
-        failure_observation={"classification": "dropped_to_floor"},
+        failure_observation=_failure_observation(),
         nominal_plan=load_plan_file(NOMINAL_PATH),
         max_corrections=1,
         progress=lambda message, fraction: progress.append((message, fraction)),
@@ -162,16 +176,16 @@ def test_recovery_schema_requires_all_three_robot_trees():
     assert behavior_trees["required"] == ["franka_a", "unitree_go2_z1", "franka_b"]
     assert behavior_trees["additionalProperties"] is False
     assert schema["properties"]["mission_id"]["const"] == (
-        "three_robot_spare_part_recovery"
+        "three_robot_component_installation"
     )
 
 
-def test_plan_diff_exposes_primary_to_spare_adaptation():
+def test_plan_diff_exposes_same_object_floor_retrieval_adaptation():
     diff = plan_diff(load_plan_file(NOMINAL_PATH), load_plan_file(ORACLE_PATH))
 
-    assert "-            \"primary_part\"" in diff
-    assert "+            \"spare_part\"" in diff
-    assert "backup_bin" in diff
+    assert "+          \"name\": \"recover_fallen_part\"" in diff
+    assert "source_floor" in diff
+    assert "spare_part" not in diff
 
 
 def test_fault_contract_and_recovery_cli_defaults_are_explicit():

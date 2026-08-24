@@ -1,0 +1,45 @@
+{
+  "schema_version": "2.0",
+  "mission_id": "three_robot_component_installation",
+  "behavior_trees": {
+    "franka_a": {
+      "id": "component_nominal.franka_a.root",
+      "type": "Sequence",
+      "source": "llm",
+      "children": [
+        {"id": "component_nominal.franka_a.acquire", "type": "AcquireResource", "name": "source_zone", "parameters": [], "timeout_ticks": 40, "source": "llm"},
+        {"id": "component_nominal.franka_a.pick_primary", "type": "Action", "task_id": "nominal_pick_primary", "name": "pick_source_part", "parameters": ["primary_part", "primary_bin"], "source": "llm"},
+        {"id": "component_nominal.franka_a.place", "type": "Action", "task_id": "nominal_place_primary", "name": "place_source_cradle", "parameters": ["primary_part"], "source": "llm"},
+        {"id": "component_nominal.franka_a.release", "type": "ReleaseResource", "name": "source_zone", "parameters": [], "source": "llm"}
+      ]
+    },
+    "unitree_go2_z1": {
+      "id": "component_nominal.go2.root",
+      "type": "Sequence",
+      "source": "llm",
+      "children": [
+        {"id": "component_nominal.go2.wait", "type": "WaitFor", "name": "at", "parameters": ["primary_part", "source_cradle"], "timeout_ticks": 80, "source": "llm"},
+        {"id": "component_nominal.go2.acquire_source", "type": "AcquireResource", "name": "source_zone", "parameters": [], "timeout_ticks": 40, "source": "llm"},
+        {"id": "component_nominal.go2.pick", "type": "Action", "task_id": "nominal_go2_pick", "name": "pick_source_cradle", "parameters": ["primary_part"], "source": "llm"},
+        {"id": "component_nominal.go2.release_source", "type": "ReleaseResource", "name": "source_zone", "parameters": [], "source": "llm"},
+        {"id": "component_nominal.go2.navigate", "type": "Action", "task_id": "nominal_go2_navigate", "name": "navigate_destination", "parameters": ["primary_part"], "source": "llm"},
+        {"id": "component_nominal.go2.acquire_destination", "type": "AcquireResource", "name": "destination_zone", "parameters": [], "timeout_ticks": 40, "source": "llm"},
+        {"id": "component_nominal.go2.place", "type": "Action", "task_id": "nominal_go2_place", "name": "place_destination_cradle", "parameters": ["primary_part"], "source": "llm"},
+        {"id": "component_nominal.go2.stow", "type": "Action", "task_id": "nominal_go2_stow", "name": "stow_arm_destination", "parameters": ["primary_part"], "source": "llm"},
+        {"id": "component_nominal.go2.release_destination", "type": "ReleaseResource", "name": "destination_zone", "parameters": [], "source": "llm"}
+      ]
+    },
+    "franka_b": {
+      "id": "component_nominal.franka_b.root",
+      "type": "Sequence",
+      "source": "llm",
+      "children": [
+        {"id": "component_nominal.franka_b.wait", "type": "WaitFor", "name": "at", "parameters": ["primary_part", "destination_cradle"], "timeout_ticks": 80, "source": "llm"},
+        {"id": "component_nominal.franka_b.acquire", "type": "AcquireResource", "name": "destination_zone", "parameters": [], "timeout_ticks": 40, "source": "llm"},
+        {"id": "component_nominal.franka_b.pick", "type": "Action", "task_id": "nominal_franka_b_pick", "name": "pick_destination_cradle", "parameters": ["primary_part"], "source": "llm"},
+        {"id": "component_nominal.franka_b.install", "type": "Action", "task_id": "nominal_franka_b_install", "name": "install_target", "parameters": ["primary_part", "target_fixture"], "source": "llm"},
+        {"id": "component_nominal.franka_b.release", "type": "ReleaseResource", "name": "destination_zone", "parameters": [], "source": "llm"}
+      ]
+    }
+  }
+}

@@ -1,7 +1,7 @@
 """Generate and verify synchronized multi-robot Behavior Trees.
 
 The package contains a standalone symbolic contract planner plus an optional
-MuJoCo executor for courier, collaborative packing/delivery, and spare-part recovery
+MuJoCo executor for courier, collaborative packing/delivery, and fallen-part recovery
 scenarios. ROS 2, perception, and hardware execution remain outside this release.
 """
 

@@ -14,7 +14,7 @@ from typing import Any, Callable, Protocol
 
 from .artifacts import load_plan_file
 from .bt import iter_nodes
-from .domain import Scenario
+from .domain import Capability, Effects, Entity, Scenario
 from .llm.base import LLMError
 from .llm.openai_client import _send
 from .plan import Plan, parse_plan
@@ -31,9 +31,10 @@ RECOVERY_SYSTEM_PROMPT = (
     "You are the online recovery planner for a heterogeneous robot team. A nominal Behavior "
     "Tree has failed in a live physics state. Return a complete continuation Behavior Tree for "
     "every robot. Preserve safety and resource ownership, use only declared capabilities, avoid "
-    "the diagnosed unusable object, use only Sequence and Fallback composite nodes, and reach "
-    "every mission goal from the measured post-failure state. The returned JSON is executed "
-    "without resetting the simulator."
+    "inventing objects or observations, use only Sequence and Fallback composite nodes, and "
+    "reach every mission goal from the measured post-failure state. If the observation says the "
+    "fallen object remains usable, recover that same object with the newly reported recovery "
+    "capability. The returned JSON is executed without resetting the simulator."
 )
 
 
@@ -187,13 +188,10 @@ def plan_recovery(
     """Generate, validate, and contract-simulate a same-state continuation BT."""
     if max_corrections < 0:
         raise ValueError("max_corrections cannot be negative.")
-    runtime_scenario = replace(
+    runtime_scenario = _runtime_recovery_scenario(
         scenario,
-        instruction=(
-            f"{scenario.instruction} Continue from the measured failure snapshot without a reset. "
-            "The diagnosed primary_part is unavailable; use available inventory to finish safely."
-        ),
-        initial_state=tuple(canonical_predicate(fact) for fact in measured_initial_state),
+        measured_initial_state=measured_initial_state,
+        failure_observation=failure_observation,
     )
     _recovery_progress(progress, "Prepared the measured post-failure planning state", 0.03)
     attempts: list[dict[str, Any]] = []
@@ -269,7 +267,7 @@ def plan_recovery(
         if accepted:
             _recovery_progress(
                 progress,
-                f"{round_label}: accepted; all validation, simulation, and spare-part checks passed",
+                f"{round_label}: accepted; validation, simulation, and fallen-object recovery checks passed",
                 0.92,
             )
             _recovery_progress(progress, "Validated continuation BT is ready for MuJoCo", 1.0)
@@ -324,7 +322,12 @@ def build_recovery_prompt(
     sections = [
         "Adapt the failed mission by returning a complete continuation BT for all three robots.",
         "Execution will resume in the exact current MuJoCo model/data state; no reset is allowed.",
-        "Do not retry primary_part. Select spare_part from backup_bin and coordinate the normal handoff.",
+        (
+            "The only task object is primary_part. It fell to source_floor, was measured there, "
+            "and remains usable. Have unitree_go2_z1 execute "
+            "recover_fallen_part(primary_part,source_floor), then continue transport and installation. "
+            "Do not invent a spare or replacement object."
+        ),
         f"Failure observation:\n{json.dumps(failure_observation, indent=2)}",
         f"Failed nominal BT:\n{json.dumps(nominal_plan.to_dict(), indent=2)}",
         build_prompt(runtime_scenario),
@@ -422,7 +425,7 @@ def recovery_plan_json_schema() -> dict[str, Any]:
             "schema_version": {"type": "string", "const": "2.0"},
             "mission_id": {
                 "type": "string",
-                "const": "three_robot_spare_part_recovery",
+                "const": "three_robot_component_installation",
             },
             "behavior_trees": {
                 "type": "object",
@@ -453,15 +456,28 @@ def _responses_output_text(response: dict[str, Any]) -> str:
 
 
 def _recovery_semantic_errors(plan: Plan) -> list[str]:
-    nodes = [
-        node for tree in plan.behavior_trees.values() for node in iter_nodes(tree)
-    ]
+    nodes = [node for tree in plan.behavior_trees.values() for node in iter_nodes(tree)]
     action_parameters = [node.parameters for node in nodes if node.type == "Action"]
+    recovery_actions = [
+        (robot, node)
+        for robot, tree in plan.behavior_trees.items()
+        for node in iter_nodes(tree)
+        if node.type == "Action" and node.name == "recover_fallen_part"
+    ]
     errors: list[str] = []
-    if not any("spare_part" in parameters for parameters in action_parameters):
-        errors.append("Recovery BT does not operate on spare_part.")
-    if any("primary_part" in parameters for parameters in action_parameters):
-        errors.append("Recovery BT retries the diagnosed unavailable primary_part.")
+    if not any("primary_part" in parameters for parameters in action_parameters):
+        errors.append("Recovery BT does not operate on the fallen primary_part.")
+    if any("spare_part" in parameters for parameters in action_parameters):
+        errors.append("Recovery BT invents an undeclared spare_part.")
+    if not any(
+        robot == "unitree_go2_z1"
+        and node.parameters == ("primary_part", "source_floor")
+        for robot, node in recovery_actions
+    ):
+        errors.append(
+            "Recovery BT must have unitree_go2_z1 execute "
+            "recover_fallen_part(primary_part,source_floor)."
+        )
     unsupported_composites = sorted(
         {node.type for node in nodes if node.children and node.type not in {"Sequence", "Fallback"}}
     )
@@ -472,3 +488,86 @@ def _recovery_semantic_errors(plan: Plan) -> list[str]:
             + ". Use only Sequence and Fallback."
         )
     return errors
+
+
+def _runtime_recovery_scenario(
+    scenario: Scenario,
+    *,
+    measured_initial_state: tuple[str, ...],
+    failure_observation: dict[str, Any],
+) -> Scenario:
+    """Reveal the measured floor-recovery affordance only after the runtime failure."""
+    expected = {
+        "classification": "dropped_to_floor",
+        "object": "primary_part",
+        "object_usable": True,
+        "recovery_location": "source_floor",
+    }
+    mismatches = [
+        key for key, value in expected.items() if failure_observation.get(key) != value
+    ]
+    if mismatches:
+        raise ValueError(
+            "Same-object recovery requires a measured, usable primary_part at source_floor; "
+            f"observation fields did not match: {', '.join(mismatches)}."
+        )
+
+    go2 = scenario.robot("unitree_go2_z1")
+    if go2 is None:
+        raise ValueError("Recovery scenario does not declare unitree_go2_z1.")
+    if scenario.capability("unitree_go2_z1", "recover_fallen_part") is not None:
+        raise ValueError(
+            "The nominal scenario already exposes recover_fallen_part; fault-blind planning "
+            "requires adding it only after the measured failure."
+        )
+
+    recover_fallen_part = Capability(
+        name="recover_fallen_part",
+        parameters=("part", "location"),
+        parameter_types=("part", "location"),
+        resources=("source_zone",),
+        action_type="manipulation",
+        duration_ticks=3,
+        timeout_ticks=60,
+        preconditions=tuple(
+            canonical_predicate(literal)
+            for literal in (
+                "system_ready()",
+                "robot_ready(unitree_go2_z1)",
+                "base_stationary(unitree_go2_z1)",
+                "arm_stowed(unitree_go2_z1)",
+                "docked(unitree_go2_z1,source_dock)",
+                "usable(part)",
+                "at(part,location)",
+                "gripper_empty(unitree_go2_z1)",
+            )
+        ),
+        effects=Effects(
+            add=(canonical_predicate("holding(unitree_go2_z1,part)"),),
+            delete=tuple(
+                canonical_predicate(literal)
+                for literal in (
+                    "at(part)",
+                    "gripper_empty(unitree_go2_z1)",
+                    "arm_stowed(unitree_go2_z1)",
+                )
+            ),
+        ),
+    )
+    runtime_robots = tuple(
+        replace(robot, capabilities=(*robot.capabilities, recover_fallen_part))
+        if robot.id == go2.id
+        else robot
+        for robot in scenario.robots
+    )
+    return replace(
+        scenario,
+        instruction=(
+            f"{scenario.instruction} Continue from the measured failure snapshot without a reset. "
+            "The same primary_part is intact and measured at source_floor. Recover it with the "
+            "newly available Go2/Z1 floor-retrieval capability, then finish the mission."
+        ),
+        initial_state=tuple(canonical_predicate(fact) for fact in measured_initial_state),
+        entities=(*scenario.entities, Entity(id="source_floor", type="location")),
+        robots=runtime_robots,
+    )

@@ -1,7 +1,7 @@
 {
   "schema_version": "1.0",
-  "task_id": "three_robot_spare_part_recovery",
-  "instruction": "Install the designated primary_part in target_fixture through the normal three-robot handoff. A spare_part is stored at backup_bin as inventory, but use the primary part during nominal execution. Respect both exclusive exchange zones and every declared manipulation, docking, stationary-base, grasp, usable-part, and stowed-arm precondition. For direct execution by this MuJoCo adapter, use only Sequence and Fallback composite nodes.",
+  "task_id": "three_robot_component_installation",
+  "instruction": "Install primary_part in target_fixture through the normal three-robot handoff. Respect both exclusive exchange zones and every declared manipulation, docking, stationary-base, grasp, usable-part, and stowed-arm precondition. For direct execution by this MuJoCo adapter, use only Sequence and Fallback composite nodes.",
   "initial_state": [
     "system_ready()",
     "robot_ready(franka_a)",
@@ -11,9 +11,7 @@
     "arm_stowed(unitree_go2_z1)",
     "docked(unitree_go2_z1,source_dock)",
     "usable(primary_part)",
-    "usable(spare_part)",
     "at(primary_part,primary_bin)",
-    "at(spare_part,backup_bin)",
     "gripper_empty(franka_a)",
     "gripper_empty(unitree_go2_z1)",
     "gripper_empty(franka_b)"
@@ -28,9 +26,7 @@
   ],
   "entities": [
     {"id": "primary_part", "type": "part"},
-    {"id": "spare_part", "type": "part"},
     {"id": "primary_bin", "type": "location"},
-    {"id": "backup_bin", "type": "location"},
     {"id": "source_cradle", "type": "location"},
     {"id": "destination_cradle", "type": "location"},
     {"id": "target_fixture", "type": "fixture"},

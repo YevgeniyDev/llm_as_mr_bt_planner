@@ -65,10 +65,11 @@ SUPPORTED_ACTIONS = {
         "place_parcel_at_delivery_station",
         "stow_after_delivery",
     },
-    "three_robot_spare_part_recovery": {
+    "three_robot_component_installation": {
         "pick_source_part",
         "place_source_cradle",
         "pick_source_cradle",
+        "recover_fallen_part",
         "navigate_destination",
         "place_destination_cradle",
         "stow_arm_destination",
@@ -319,7 +320,7 @@ def _check_adapter_scope(scenario, plan) -> None:
     if supported is None or set(plan.behavior_trees) != SUPPORTED_ROBOTS:
         raise ValueError(
             "The physical adapter supports the bundled courier, packaging-delivery, "
-            "and spare-part-recovery task IDs with robots franka_a, unitree_go2_z1, "
+            "and component-installation task IDs with robots franka_a, unitree_go2_z1, "
             "and franka_b. It does not silently reinterpret other scenarios."
         )
     for robot, root in plan.behavior_trees.items():

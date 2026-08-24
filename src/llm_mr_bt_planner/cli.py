@@ -22,11 +22,11 @@ from .xml_export import export_behaviortree_cpp_xml
 
 DEFAULT_SCENARIO = PROJECT_ROOT / "examples" / "three_robot_courier.json"
 PACKAGING_SCENARIO = PROJECT_ROOT / "examples" / "three_robot_packaging_delivery.json"
-RECOVERY_SCENARIO = PROJECT_ROOT / "examples" / "three_robot_spare_part_recovery.json"
-RECOVERY_BT = PROJECT_ROOT / "examples" / "three_robot_spare_part_recovery.bt.json"
-RECOVERY_FAULT = PROJECT_ROOT / "examples" / "three_robot_spare_part_recovery.fault.json"
+RECOVERY_SCENARIO = PROJECT_ROOT / "examples" / "three_robot_component_installation.json"
+RECOVERY_BT = PROJECT_ROOT / "examples" / "three_robot_component_installation.bt.json"
+RECOVERY_FAULT = PROJECT_ROOT / "examples" / "three_robot_component_installation.fault.json"
 RECOVERY_ORACLE_BT = (
-    PROJECT_ROOT / "examples" / "three_robot_spare_part_recovery.expected_recovery.bt.json"
+    PROJECT_ROOT / "examples" / "three_robot_component_installation.expected_recovery.bt.json"
 )
 DEFAULT_TEMPLATE = PROJECT_ROOT / "templates" / "three_robot_scenario.template.json"
 

@@ -35,6 +35,7 @@ from llm_mr_bt_planner.mujoco_sim.world import (
     DOCK_Y,
     PACKAGING_STATION_POSES,
     PANDA_MOUNT_POSES,
+    RECOVERY_FLOOR_POSE,
     RECOVERY_STATION_POSES,
     SOURCE_DOCK_X,
     STATION_PAD_HALF_EXTENTS,
@@ -44,31 +45,31 @@ from llm_mr_bt_planner.mujoco_sim.world import (
 from llm_mr_bt_planner.prompts import build_prompt
 
 
-def test_adaptive_demo_nominal_gate_rejects_a_preplanned_spare_branch():
+def test_adaptive_demo_nominal_gate_rejects_a_preplanned_recovery_action():
     nominal = load_plan_file(
-        PROJECT_ROOT / "examples" / "three_robot_spare_part_recovery.bt.json"
+        PROJECT_ROOT / "examples" / "three_robot_component_installation.bt.json"
     )
     recovery = load_plan_file(
         PROJECT_ROOT
         / "examples"
-        / "three_robot_spare_part_recovery.expected_recovery.bt.json"
+        / "three_robot_component_installation.expected_recovery.bt.json"
     )
 
     actions = validate_nominal_primary_only(nominal)
 
     assert any("primary_part" in action["parameters"] for action in actions)
     assert not any("spare_part" in action["parameters"] for action in actions)
-    with pytest.raises(ValueError, match="must not contain a preplanned recovery branch"):
+    with pytest.raises(ValueError, match="before any failure was observed"):
         validate_nominal_primary_only(recovery)
 
 
 def test_adaptive_demo_nominal_prompt_contains_no_fault_identifier():
     scenario = load_scenario(
-        PROJECT_ROOT / "examples" / "three_robot_spare_part_recovery.json",
+        PROJECT_ROOT / "examples" / "three_robot_component_installation.json",
         strict=True,
     )
     fault_path = (
-        PROJECT_ROOT / "examples" / "three_robot_spare_part_recovery.fault.json"
+        PROJECT_ROOT / "examples" / "three_robot_component_installation.fault.json"
     )
 
     evidence = _fault_blindness_evidence(
@@ -77,7 +78,7 @@ def test_adaptive_demo_nominal_prompt_contains_no_fault_identifier():
         fault_id="drop_primary_after_handoff_placement",
         nominal_actions=validate_nominal_primary_only(
             load_plan_file(
-                PROJECT_ROOT / "examples" / "three_robot_spare_part_recovery.bt.json"
+                PROJECT_ROOT / "examples" / "three_robot_component_installation.bt.json"
             )
         ),
         nominal_completed=1.0,
@@ -88,6 +89,7 @@ def test_adaptive_demo_nominal_prompt_contains_no_fault_identifier():
     assert evidence["fault_disclosed_to_nominal_llm"] is False
     assert evidence["fault_configuration_loaded_after_nominal_bt_accepted"] is True
     assert evidence["fault_id_present_in_nominal_prompt"] is False
+    assert evidence["recovery_affordance_present_in_nominal_prompt"] is False
     assert len(evidence["nominal_request_prompt_sha256"]) == 64
     assert len(evidence["fault_specification_sha256"]) == 64
 
@@ -97,18 +99,18 @@ def test_adaptive_demo_orchestrates_generation_before_fault_and_publishes_audit_
     tmp_path: Path,
 ):
     scenario_path = (
-        PROJECT_ROOT / "examples" / "three_robot_spare_part_recovery.json"
+        PROJECT_ROOT / "examples" / "three_robot_component_installation.json"
     )
     fault_path = (
-        PROJECT_ROOT / "examples" / "three_robot_spare_part_recovery.fault.json"
+        PROJECT_ROOT / "examples" / "three_robot_component_installation.fault.json"
     )
     nominal = load_plan_file(
-        PROJECT_ROOT / "examples" / "three_robot_spare_part_recovery.bt.json"
+        PROJECT_ROOT / "examples" / "three_robot_component_installation.bt.json"
     )
     adapted = load_plan_file(
         PROJECT_ROOT
         / "examples"
-        / "three_robot_spare_part_recovery.expected_recovery.bt.json"
+        / "three_robot_component_installation.expected_recovery.bt.json"
     )
     scenario = load_scenario(scenario_path, strict=True)
     order: list[str] = []
@@ -172,10 +174,12 @@ def test_adaptive_demo_orchestrates_generation_before_fault_and_publishes_audit_
         observation = {
             "classification": "dropped_to_floor",
             "object": "primary_part",
+            "object_usable": True,
+            "recovery_location": "source_floor",
         }
         _, continuity = continue_after_failure(
             executor,
-            ("usable(spare_part)", "at(spare_part,backup_bin)"),
+            ("usable(primary_part)", "at(primary_part,source_floor)"),
             observation,
             {"world_identity": id(world)},
         )
@@ -302,35 +306,29 @@ def test_packaging_scene_contains_independent_parts_and_a_closed_dynamic_door(
     assert world.model.geom("delivery_pedestal_top").id >= 0
 
 
-def test_recovery_scene_has_independent_primary_and_spare_parts(
+def test_recovery_scene_has_one_primary_part_and_an_invisible_floor_location(
     menagerie_assets: Path,
 ):
     world = CourierWorld.build(
         menagerie_assets,
-        task_id="three_robot_spare_part_recovery",
+        task_id="three_robot_component_installation",
     )
 
-    assert set(world.object_body_ids) == {"primary_part", "spare_part"}
+    assert set(world.object_body_ids) == {"primary_part"}
     assert world.model.body("primary_part").jntnum == 1
-    assert world.model.body("spare_part").jntnum == 1
     assert world.object_position("primary_part") == pytest.approx(
         RECOVERY_STATION_POSES["primary_bin"]
     )
-    assert world.object_position("spare_part") == pytest.approx(
-        RECOVERY_STATION_POSES["backup_bin"]
-    )
+    assert world.site_position("source_floor") == pytest.approx(RECOVERY_FLOOR_POSE)
     assert world.active_payload_name == "primary_part"
     assert world.reset_count == 1
     assert "franka_a:primary_part" in world.grip_equalities
-    assert "franka_a:spare_part" in world.grip_equalities
     assert "target_fixture:primary_part" in world.grip_equalities
-    assert "target_fixture:spare_part" in world.grip_equalities
     assert not any(world.equality_active(key) for key in world.grip_equalities)
 
-    world.activate_weld("franka_a:spare_part")
-    assert world.active_payload_name == "spare_part"
-    assert world.equality_active("franka_a:spare_part")
-    assert not world.equality_active("franka_a:primary_part")
+    world.activate_weld("franka_a:primary_part")
+    assert world.active_payload_name == "primary_part"
+    assert world.equality_active("franka_a:primary_part")
 
 
 def test_physical_blackboard_canonicalizes_llm_predicate_whitespace(
@@ -459,7 +457,7 @@ def test_composed_world_supports_publication_recording_settings(menagerie_assets
     for task_id in (
         "three_robot_courier",
         "three_robot_packaging_delivery",
-        "three_robot_spare_part_recovery",
+        "three_robot_component_installation",
     ):
         world = CourierWorld.build(menagerie_assets, task_id=task_id)
 
@@ -605,7 +603,7 @@ def test_packaging_reference_assembles_opens_door_and_delivers(menagerie_assets:
         "oracle recovery integration test."
     ),
 )
-def test_spare_part_recovery_continues_without_reset(
+def test_fallen_part_recovery_continues_without_reset(
     menagerie_assets: Path,
     tmp_path: Path,
 ):
@@ -634,6 +632,13 @@ def test_spare_part_recovery_continues_without_reset(
     assert manifest["control"]["failed_as_expected"] is True
     assert manifest["adaptive"]["recovered"] is True
     assert adaptive["failure_observation"]["classification"] == "dropped_to_floor"
+    assert adaptive["failure_observation"]["object"] == "primary_part"
+    assert adaptive["failure_observation"]["object_usable"] is True
+    assert adaptive["failure_observation"]["recovery_location"] == "source_floor"
+    assert (
+        adaptive["failure_observation"]["recovery_strategy"]
+        == "retrieve_same_object_from_floor"
+    )
     assert adaptive["failure_observation"]["trigger_evidence"]["placed_at_location"] is True
     assert (
         adaptive["failure_observation"]["trigger_evidence"]["placement_event"]["kind"]
@@ -648,4 +653,20 @@ def test_spare_part_recovery_continues_without_reset(
     ]
     assert adaptive["continuity"]["state_hash_unchanged_while_replanning"] is True
     assert adaptive["continuity"]["no_reset_through_completion"] is True
+    assert set(adaptive["failure_snapshot"]["object_positions_m"]) == {"primary_part"}
+    recovery_success = next(
+        event
+        for event in adaptive["combined_events"]
+        if event.get("kind") == "action_success"
+        and event.get("message", "").startswith("recover_fallen_part")
+    )
+    assert recovery_success["robot"] == "unitree_go2_z1"
+    assert "ground-supported contact/proximity-qualified" in recovery_success["detail"]
+    adapted_bt = json.loads(
+        (run_dir / "adapted_behavior_tree.json").read_text(encoding="utf-8")
+    )
+    adapted_bt_text = json.dumps(adapted_bt)
+    assert "recover_fallen_part" in adapted_bt_text
+    assert "source_floor" in adapted_bt_text
+    assert "spare_part" not in adapted_bt_text
     assert all(adaptive["physical_execution"]["final_goals"].values())

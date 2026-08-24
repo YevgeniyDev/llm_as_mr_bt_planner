@@ -343,7 +343,7 @@ def test_recording_cli_defaults_are_deferred_until_recording_starts():
 def test_publication_camera_is_selected_per_mission():
     assert _default_recording_camera("three_robot_courier") == "overview"
     assert _default_recording_camera("three_robot_packaging_delivery") == "packaging_recording"
-    assert _default_recording_camera("three_robot_spare_part_recovery") == "overview"
+    assert _default_recording_camera("three_robot_component_installation") == "overview"
 
 
 def test_fixed_camera_override_bypasses_action_direction():
@@ -412,12 +412,12 @@ def test_packaging_camera_program_covers_assembly_door_route_and_delivery():
 
 
 def test_recovery_camera_program_covers_fault_handoff_route_and_installation():
-    director = camera_director_for_task("three_robot_spare_part_recovery")
+    director = camera_director_for_task("three_robot_component_installation")
     events: list[dict[str, str]] = []
     expected = (
-        ("pick_source_part(spare_part,backup_bin)", "recovery_source"),
-        ("navigate_destination(spare_part)", "recovery_route"),
-        ("install_target(spare_part,target_fixture)", "recovery_destination"),
+        ("recover_fallen_part(primary_part,source_floor)", "recovery_floor"),
+        ("navigate_destination(primary_part)", "recovery_route"),
+        ("install_target(primary_part,target_fixture)", "recovery_destination"),
     )
     for index, (action, camera) in enumerate(expected):
         robot = f"robot_{index}"

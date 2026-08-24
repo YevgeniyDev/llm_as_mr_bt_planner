@@ -1,0 +1,42 @@
+{
+  "schema_version": "2.0",
+  "mission_id": "three_robot_component_installation",
+  "behavior_trees": {
+    "franka_a": {
+      "id": "adapted.franka_a.root",
+      "type": "Sequence",
+      "source": "llm",
+      "children": [
+        {"id": "adapted.franka_a.ready", "type": "Condition", "name": "robot_ready", "parameters": ["franka_a"], "source": "llm"},
+        {"id": "adapted.franka_a.empty", "type": "Condition", "name": "gripper_empty", "parameters": ["franka_a"], "source": "llm"}
+      ]
+    },
+    "unitree_go2_z1": {
+      "id": "adapted.go2.root",
+      "type": "Sequence",
+      "source": "llm",
+      "children": [
+        {"id": "adapted.go2.acquire_floor", "type": "AcquireResource", "name": "source_zone", "parameters": [], "timeout_ticks": 40, "source": "llm"},
+        {"id": "adapted.go2.recover", "type": "Action", "task_id": "adapted_recover_fallen_primary", "name": "recover_fallen_part", "parameters": ["primary_part", "source_floor"], "source": "llm"},
+        {"id": "adapted.go2.release_floor", "type": "ReleaseResource", "name": "source_zone", "parameters": [], "source": "llm"},
+        {"id": "adapted.go2.navigate", "type": "Action", "task_id": "adapted_go2_navigate", "name": "navigate_destination", "parameters": ["primary_part"], "source": "llm"},
+        {"id": "adapted.go2.acquire_destination", "type": "AcquireResource", "name": "destination_zone", "parameters": [], "timeout_ticks": 40, "source": "llm"},
+        {"id": "adapted.go2.place", "type": "Action", "task_id": "adapted_go2_place", "name": "place_destination_cradle", "parameters": ["primary_part"], "source": "llm"},
+        {"id": "adapted.go2.stow", "type": "Action", "task_id": "adapted_go2_stow", "name": "stow_arm_destination", "parameters": ["primary_part"], "source": "llm"},
+        {"id": "adapted.go2.release_destination", "type": "ReleaseResource", "name": "destination_zone", "parameters": [], "source": "llm"}
+      ]
+    },
+    "franka_b": {
+      "id": "adapted.franka_b.root",
+      "type": "Sequence",
+      "source": "llm",
+      "children": [
+        {"id": "adapted.franka_b.wait", "type": "WaitFor", "name": "at", "parameters": ["primary_part", "destination_cradle"], "timeout_ticks": 80, "source": "llm"},
+        {"id": "adapted.franka_b.acquire", "type": "AcquireResource", "name": "destination_zone", "parameters": [], "timeout_ticks": 40, "source": "llm"},
+        {"id": "adapted.franka_b.pick", "type": "Action", "task_id": "adapted_franka_b_pick", "name": "pick_destination_cradle", "parameters": ["primary_part"], "source": "llm"},
+        {"id": "adapted.franka_b.install", "type": "Action", "task_id": "adapted_franka_b_install", "name": "install_target", "parameters": ["primary_part", "target_fixture"], "source": "llm"},
+        {"id": "adapted.franka_b.release", "type": "ReleaseResource", "name": "destination_zone", "parameters": [], "source": "llm"}
+      ]
+    }
+  }
+}
