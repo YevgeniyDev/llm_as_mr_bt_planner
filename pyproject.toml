@@ -24,6 +24,10 @@ mujoco = [
     "imageio-ffmpeg>=0.5,<1",
     "pillow>=10,<13",
 ]
+llm-bt = [
+    "torch>=2.6,<3",
+    "transformers>=4.42,<5",
+]
 
 [project.scripts]
 lmrbtp = "llm_mr_bt_planner.cli:main"

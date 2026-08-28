@@ -188,7 +188,7 @@ def plan_recovery(
     """Generate, validate, and contract-simulate a same-state continuation BT."""
     if max_corrections < 0:
         raise ValueError("max_corrections cannot be negative.")
-    runtime_scenario = _runtime_recovery_scenario(
+    runtime_scenario = build_runtime_recovery_scenario(
         scenario,
         measured_initial_state=measured_initial_state,
         failure_observation=failure_observation,
@@ -490,7 +490,7 @@ def _recovery_semantic_errors(plan: Plan) -> list[str]:
     return errors
 
 
-def _runtime_recovery_scenario(
+def build_runtime_recovery_scenario(
     scenario: Scenario,
     *,
     measured_initial_state: tuple[str, ...],

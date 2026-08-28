@@ -362,6 +362,229 @@ The room boundary is physical geometry and the door is an initially closed, coll
 
 Robot MJCF files are fetched from MuJoCo Menagerie at the pinned commit recorded in [third-party notices](THIRD_PARTY_NOTICES.md). The arm controller adapts the damped differential-IK structure demonstrated by `mjctrl`. The native Go2 controller adapts the alternating contact-gait and joint-torque structure from `go2-convex-mpc`; it is not the upstream Pinocchio/CasADi convex-MPC solver. The upstream solver assumes Python 3.10 and a standalone bare-Go2 state layout, while this program controls the combined Go2/Z1 model directly through MuJoCo state.
 
+## Paper comparison baselines
+
+Primary quantitative comparison is deliberately limited to five external methods: LLM-as-BT-Planner, LLM-BT, BETR-XP-LLM, LLM-HBT, and MRBTP. This keeps the table centered on LLM-generated BTs and runtime adaptation, with MRBTP retained as the one non-LLM planning reference. Broader approaches remain discussed in the paper's related-work review, but they are not implemented or reported as primary experimental baselines.
+
+Baseline implementations live behind `lmrbtp compare` and remain separate from the proposed planner. All five selected methods are implemented below with method-specific provenance, native artifacts, common-domain observations, and regression tests.
+
+### LLM-as-BT-Planner comparison
+
+The first implemented baseline is **LLM-as-BT-Planner** (Ao et al., ICRA 2025). The authors' MIT-licensed KIOS repository is pinned at commit `e9f16f5bd110ab647242077d55d5cb0a71e4fcd9`. The common-domain compatibility runner preserves the published two-level planning flow: an assembly planner first creates sequential subgoals, then one of the four reported in-context schemes produces native KIOS `summary`/`name`/`children` JSON trees. `one-step` generates each complete tree once; `iterative` regenerates after native dummy-simulation failure for at most five attempts by default; `human` creates an action plan and applies archived human revisions; and `recursive` performs the reported `MakePlan`, `MakeTree`, and `PredictState` expansion procedure.
+
+Download, hash, license-check, and extract the exact official source for inspection:
+
+```powershell
+lmrbtp compare llm-as-bt-planner prepare `
+  --output outputs/comparison/llm-as-bt-planner/source
+```
+
+Run the paper's main GPT-4 configuration with the unattended one-step scheme:
+
+```powershell
+lmrbtp compare llm-as-bt-planner run `
+  --scenario examples/three_robot_courier.json `
+  --scheme one-step `
+  --provider openai `
+  --model gpt-4 `
+  --output outputs/comparison/llm-as-bt-planner/runs
+```
+
+Select `--scheme iterative`, `--scheme human`, or `--scheme recursive` to evaluate the other paper variants. Human runs accept `--human-feedback feedback.json`, where the file maps each subgoal ID to an ordered array of feedback strings, for example `{"source_handoff": ["Keep the source-zone guard explicit."]}`. An absent or empty array accepts the first generated tree. The iterative attempt limit and recursive safety bounds are explicit through `--max-iterations`, `--max-recursive-depth`, and `--max-recursive-expansions`.
+
+The native observer rejects unknown fields and node types, malformed unit subtrees, hallucinated robot/action assignments, undeclared constants, and disagreement between the reported action sequence and tree leaves. It maps KIOS selectors and memoryless sequences to the closest common control nodes, represents an existing cross-robot KIOS precondition as a bounded wait, exposes resource operations already required by the selected low-level capability, and assigns trace IDs. It does not add, remove, reorder, retry, or substitute task actions. Native trees, dummy-simulation feedback, every prompt/response, subgoal and recursive trace, human feedback, the canonical observation, PS/SV/GS evidence, fidelity limits, and checksums are archived. `accepted_plan.json` is emitted only after common static validation and symbolic execution both pass.
+
+Archived calls can be replayed without an API request:
+
+```powershell
+lmrbtp compare llm-as-bt-planner run `
+  --scenario examples/three_robot_courier.json `
+  --scheme one-step `
+  --responses path/to/ordered_kios_responses.json `
+  --output outputs/comparison/llm-as-bt-planner/replays
+```
+
+Replay input has the form `{"responses": [{"stage": "decompose", "response": {...}}, {"stage": "one_step", "subgoal": "source_handoff", "response": {...}}]}`. Entries are consumed in order and optional `subgoal`, `attempt`, and `depth` fields are checked against the actual call context. Replay artifacts are marked as non-model evidence and report zero new model calls.
+
+### LLM-BT comparison
+
+The second implemented baseline is **LLM-BT** (Zhou et al., ICRA 2024). Its nominal path retains the published architecture: one ChatGPT reasoning call converts the instruction and XML semantic map into descriptive move steps, the authors' released DistilBERT token classifier extracts action/target/destination fields, and the deterministic BT Update stage recursively expands failed goal conditions through a manually supplied Action Template Library (ATL). Its recovery path also follows the published boundary: a newly false condition triggers ATL expansion, but ChatGPT and DistilBERT are **not** called again after the disturbance.
+
+Install the released-parser dependencies and explicitly prepare the pinned upstream files:
+
+```powershell
+python -m pip install -e ".[llm-bt,dev]"
+lmrbtp compare llm-bt prepare `
+  --output outputs/comparison/llm-bt/source
+```
+
+Preparation downloads 16 method-defining files and the authors' 265,510,949-byte DistilBERT checkpoint from immutable commit `c69c18d0cf4b78f166ed352fc0fa8470823b32f6`, then verifies every SHA-256 hash, the model size, architecture, and eight-label vocabulary. The upstream repository declares no project-wide software license and no parser-model license. Its embedded `BTsUpdate/core/LICENSE` covers only the Michele Colledanchise BT core; the command records this boundary and does not bundle or redistribute upstream files. Use `--without-parser-model` for a provenance-only preparation.
+
+For a real nominal run, set an OpenAI key and choose the model explicitly:
+
+```powershell
+$env:OPENAI_API_KEY = "your-key"
+lmrbtp compare llm-bt run `
+  --scenario examples/three_robot_component_installation.json `
+  --model gpt-3.5-turbo `
+  --source outputs/comparison/llm-bt/source `
+  --output outputs/comparison/llm-bt/runs
+```
+
+The paper and repository do not report the ChatGPT model version, original prompt, or decoding settings. `gpt-3.5-turbo`, temperature 0, and seed 42 are therefore recorded reproduction choices, not author-reported settings. The common adapter serializes the measured symbolic state as XML and gives grounded ATL postconditions stable `object_N`/`position_N` move aliases because the released parser implements only its original `move` grammar. The deterministic layer then maps parsed postconditions back to the unchanged capability contract, emits the paper's `Fallback(condition, Sequence(preconditions, action))` expansions, partitions producer work by declared robot ownership, and represents cross-robot dependencies and exclusive resources explicitly. The original tick-wise failed-node updates are materialized to an ATL fixpoint before common static validation. This adaptation and the non-applied central-tree Insert priority move are listed in each manifest.
+
+Archived reasoning and NER results can test the complete downstream path without an API or ML installation:
+
+```powershell
+lmrbtp compare llm-bt run `
+  --scenario examples/three_robot_component_installation.json `
+  --responses path/to/llm_bt_replay.json `
+  --output outputs/comparison/llm-bt/replays
+```
+
+Replay JSON has this shape:
+
+```json
+{
+  "reasoning_response": "1. Move object 7 to position 17.",
+  "ner_predictions": [
+    {"entity": "B-Action", "word": "Move"},
+    {"entity": "B-Target", "word": "object"},
+    {"entity": "I-Target", "word": "7"},
+    {"entity": "B-Destination", "word": "position"},
+    {"entity": "I-Destination", "word": "17"}
+  ]
+}
+```
+
+The aliases must come from that run's archived `native/alias_catalog.json`; the abbreviated example is structural, not a complete mission response. Replay manifests explicitly record zero new model and parser calls.
+
+To evaluate the published deterministic recovery mechanism, first complete a nominal component-installation run. Then pass its run directory and the shared post-drop snapshot:
+
+```powershell
+lmrbtp compare llm-bt recover `
+  --scenario examples/three_robot_component_installation.json `
+  --nominal-run outputs/comparison/llm-bt/runs/<completed-run-directory> `
+  --failure-snapshot path/to/failure_snapshot.json `
+  --output outputs/comparison/llm-bt/recovery
+```
+
+The snapshot JSON requires `measured_initial_state` (the exact post-failure fact array) and `failure_observation` (the detected drop record). The runner reuses `native/parsed_goals.json`, exposes the post-failure `recover_fallen_part(primary_part, source_floor)` ATL entry, and archives RPS/RV/RGS evidence. It does not reveal the fault to the nominal prompt, substitute a spare object, or claim an LLM call during recovery.
+
+### BETR-XP-LLM comparison
+
+The third implemented baseline is **BETR-XP-LLM** (Styrud et al., ICRA 2025). The nominal path retains the method's two-layer design: one GPT-4-1106-Preview call maps the natural-language task and described scene into a strict first-order-logic goal formula, then a deterministic PDDL-style planner expands false conditions into reactive `Fallback(condition, Sequence(preconditions, action))` branches. No validator diagnostic or future failure is included in this call. At execution failure, a separate LLM call resolves missing knowledge and permanently updates the planner policy.
+
+Prepare and verify the authors' complete BSD-3-Clause repository at immutable commit `bf83bda4b8921eea7fe0b8756daacb7da9fb6133`:
+
+```powershell
+lmrbtp compare betr-xp-llm prepare `
+  --output outputs/comparison/betr-xp-llm/source
+```
+
+The command verifies the 217,879-byte archive SHA-256 (`54bc787eb7ae78901e3d9dee3929dfc1d90bf0412a246428a3e2b4dc7ecb370f`), all 120 extracted files, required prompt/planner/test files, and the upstream BSD license. The upstream source is preserved separately for inspection. The common runner is an official-source-informed compatibility implementation because the authors' executable stack is specific to ABB YuMi, Azure OpenAI, PyTrees, RWS, camera/segmentation, and collision-planning interfaces.
+
+Run nominal planning with the paper's reported sampling settings (temperature 0.1, top-p 0.1, one user message):
+
+```powershell
+$env:OPENAI_API_KEY = "your-key"
+lmrbtp compare betr-xp-llm run `
+  --scenario examples/three_robot_component_installation.json `
+  --model gpt-4-1106-preview `
+  --source outputs/comparison/betr-xp-llm/source `
+  --output outputs/comparison/betr-xp-llm/runs
+```
+
+Every prompt, raw formula, typed condition/object alias, DNF alternative, initial goal forest, expansion trace, native list-form policy, canonical observation, PS/SV/GS result, and checksum is archived. The common-domain representation partitions the original single-YuMi policy by declared robot ownership and renders cross-robot dependencies and resources explicitly; it does not feed common validation results back to the model.
+
+For the dropped-component trial, pass a successful nominal run and the same measured post-failure snapshot used by the other recovery methods:
+
+```powershell
+lmrbtp compare betr-xp-llm recover `
+  --scenario examples/three_robot_component_installation.json `
+  --nominal-run outputs/comparison/betr-xp-llm/runs/<completed-run-directory> `
+  --failure-snapshot path/to/failure_snapshot.json `
+  --model gpt-4-1106-preview `
+  --source outputs/comparison/betr-xp-llm/source `
+  --output outputs/comparison/betr-xp-llm/recovery
+```
+
+This trial uses the paper's missing-parameter resolution branch. Only after the failure, the LLM receives the observed intact object's location and must change the native generic pickup binding from `Pick(primary_part, source_cradle)` to `Pick(primary_part, source_floor)`. That resolved parameter constrains the grounded action set used for replanning and must bind to `recover_fallen_part(primary_part, source_floor)`; an incorrect or invented location remains a failed RPS/RV/RGS trial. The update retrieves the same `primary_part`, never substitutes a spare, and archives before/after native policies plus the exact parameter update. This dropped-object test is a common capability/interface adaptation, not one of the paper's ten original missing-precondition scenarios.
+
+Offline replay uses `{"goal_response": "Goal: ..."}` with `run` or `{"recovery_response": "Reasoning: ...\nParameter value: source_floor"}` with `recover`. Replays execute the same parsers and planners but are explicitly recorded as archived evidence with zero real model calls.
+
+### LLM-HBT comparison
+
+The fourth implemented baseline is **LLM-HBT** (Wang et al., 2025). It retains the paper's four-module control flow: an LLM initializes ordered condition nodes, failed conditions enter a queue, the coordinator Alex assigns each failed node to a capable robot, and a second LLM decision selects one action from that robot's library. The selected action is inserted locally or delegated to another robot with requester monitoring; its unmet preconditions recursively enter the same queue. The common observer serializes the resulting native selector/sequence forest without changing the LLM-selected robot, action, dependency order, or recovery object.
+
+The author-owned project repository currently contains only a project page saying that the code repository is “Coming Soon.” The paper also does not report the LLM identifier, prompts, response grammar, temperature, or seed. This implementation is therefore a clearly labeled clean-room reproduction, not an execution of official author code. Pin and inspect the exact author page and arXiv v1 source first:
+
+```powershell
+lmrbtp compare llm-hbt prepare `
+  --output outputs/comparison/llm-hbt/source
+```
+
+Preparation verifies the author project page at commit `17ff0ad9fc8e0f5ef3534086589cfa812b20cf29`, project archive SHA-256 `d7e22fc0ce6ea5c30dfdd4f10da7ccf914e9ef1b230f3db9c8140bc4c7f96002`, and arXiv v1 source SHA-256 `bb40eff629f12f7a9ae58e989abe518a1092f73a9a26288ec4f361f17f29ca28`. It records that no executable source or software license was published; the downloaded material is provenance only.
+
+Run a live nominal trial with an explicitly selected reproduction model:
+
+```powershell
+$env:OPENAI_API_KEY = "your-key"
+lmrbtp compare llm-hbt run `
+  --scenario examples/three_robot_component_installation.json `
+  --provider openai `
+  --model gpt-4o-2024-08-06 `
+  --source outputs/comparison/llm-hbt/source `
+  --output outputs/comparison/llm-hbt/runs
+```
+
+The default uses strict JSON, temperature 0, and seed 42 as disclosed reproduction choices. Every system/user prompt, raw decision, queue event, Alex assignment, robot-selected action, local/delegated update, native forest, canonical observation, metric, and checksum is archived. The deterministic layer checks that a selected action belongs to the assigned robot and establishes the failed condition; a wrong selection fails the run instead of being repaired or sent validator feedback.
+
+For the shared dropped-component trial, reuse a completed nominal run and reveal the measured snapshot only after failure:
+
+```powershell
+lmrbtp compare llm-hbt recover `
+  --scenario examples/three_robot_component_installation.json `
+  --nominal-run outputs/comparison/llm-hbt/runs/<completed-run-directory> `
+  --failure-snapshot path/to/failure_snapshot.json `
+  --provider openai `
+  --model gpt-4o-2024-08-06 `
+  --source outputs/comparison/llm-hbt/source `
+  --output outputs/comparison/llm-hbt/recovery
+```
+
+The recovery runner reuses the nominal LLM-initialized conditions, invokes Alex and robot action selection again from the measured post-drop state, and accepts only a continuation containing `recover_fallen_part(primary_part, source_floor)`. The same `primary_part` must then be transported and installed; no spare object is introduced. The nominal forest, failure snapshot, post-failure calls, online insertions, and RPS/RV/RGS evidence remain separate and auditable.
+
+Offline replay accepts `{"responses": [...]}`. Entries are consumed in exact call order using stages `initialize`, `assign`, and `select_action`; optional `condition`, `requester`, `robot`, and `track` fields are checked against the live call context. A response is either a strict object such as `{"conditions": [...]}`, `{"robot": "franka_a", "mode": "local", "task": "..."}`, or `{"action": "pick_source_part(primary_part,primary_bin)"}`. Replays exercise the full downstream implementation but are marked as archived evidence with zero new model calls.
+
+### MRBTP comparison
+
+The fifth implemented baseline is **MRBTP** (Cai et al., AAAI 2025). This is the focused non-LLM planning reference. The runner retains the official FIFO MRBTP/MABTP path with composite actions disabled: a shared queue starts from the complete team goal, every robot expands each queued condition through its own grounded action space, and the planner records both in-tree and cross-tree additions. Action relevance, regressed premises, subset pruning, common conflicts, and the full backup forest are checked independently before the common observer is accepted.
+
+Download and verify the complete MIT-licensed official repository at immutable commit `3d6bd240aa2903245b2335711a97ee394f174313`:
+
+```powershell
+lmrbtp compare mrbtp prepare `
+  --output outputs/comparison/mrbtp/source
+```
+
+The preparation command verifies archive SHA-256 `959d3559d10721b45629074ca944d95df92ba73bc44a9f6a57332a28dcd20030`, every extracted file, the required planner/action-node sources, and the MIT license. The upstream tree remains in the ignored output directory for inspection.
+
+Run the nominal comparison in the shared component-installation setting:
+
+```powershell
+lmrbtp compare mrbtp run `
+  --scenario examples/three_robot_component_installation.json `
+  --source outputs/comparison/mrbtp/source `
+  --output outputs/comparison/mrbtp/runs
+```
+
+No API key or model is used. The paper's optional LLM-generated composite-action plugin is deliberately disabled so MRBTP remains the non-LLM reference. `--max-expansions` bounds symbolic construction and `--max-ticks` bounds common execution.
+
+Each run archives the grounded per-robot action spaces, FIFO expansion trace, planning graph, native backup forest, reconstructed solution witness, intention-sharing protocol, canonical common forest, validation results, simulation trace, metrics, checksums, and exact source manifest. Common nodes use explicit `source: planner`; the validator accepts that provenance only through an opt-in reactive-policy profile, while ordinary generated plans remain LLM-only by default. Resource leaves and bounded team-goal waits expose the shared executor contract without adding, deleting, substituting, or reordering task actions.
+
+This is an official-source-aligned common-domain port, not an unmodified run of the upstream MiniGrid or VirtualHome environment. The common executor uses actual-state premise guards and deterministic round-robin ticks rather than MRBTP's speculative belief-success semantics. Communication-loss, homogeneous-action failure, and the optional LLM subtree experiments remain outside this nominal comparison track.
+
 ## Saved projects
 
 The UI can save the validated scenario, mission instruction, provider name, model, and run limits as a local project. Project files are written under `projects/` and never contain an API key.

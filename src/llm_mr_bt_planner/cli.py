@@ -234,6 +234,350 @@ def _build_parser() -> argparse.ArgumentParser:
     adaptive.add_argument("--video-width", type=int, default=1920)
     adaptive.add_argument("--video-height", type=int, default=1080)
     adaptive.set_defaults(func=_cmd_adaptive_demo)
+
+    compare = sub.add_parser(
+        "compare",
+        help="Prepare, train, and run paper-baseline reproductions under the common protocol.",
+    )
+    methods = compare.add_subparsers(dest="comparison_method", required=True)
+    llm_as_bt = methods.add_parser(
+        "llm-as-bt-planner",
+        help="KIOS JSON assembly planner with the paper's four in-context generation schemes.",
+    )
+    llm_as_bt_actions = llm_as_bt.add_subparsers(dest="comparison_action", required=True)
+    llm_as_bt_prepare = llm_as_bt_actions.add_parser(
+        "prepare",
+        help="Download, hash, and verify the pinned official MIT-licensed KIOS source.",
+    )
+    llm_as_bt_prepare.add_argument(
+        "--output",
+        default=str(PROJECT_ROOT / "outputs" / "comparison" / "llm-as-bt-planner" / "source"),
+    )
+    llm_as_bt_prepare.add_argument("--force", action="store_true", help="Redownload the pinned archive.")
+    llm_as_bt_prepare.set_defaults(func=_cmd_llm_as_bt_prepare)
+
+    llm_as_bt_run = llm_as_bt_actions.add_parser(
+        "run",
+        help="Generate native KIOS trees and evaluate their strict common-protocol observation.",
+    )
+    llm_as_bt_run.add_argument("--scenario", default=str(DEFAULT_SCENARIO))
+    llm_as_bt_run.add_argument(
+        "--scheme",
+        choices=["one-step", "iterative", "human", "recursive"],
+        default="one-step",
+    )
+    llm_as_bt_run.add_argument("--provider", choices=["openai", "anthropic"], default="openai")
+    llm_as_bt_run.add_argument(
+        "--model",
+        default="gpt-4",
+        help="LLM backbone; GPT-4 matches the model reported for the paper's main comparison.",
+    )
+    llm_as_bt_run.add_argument(
+        "--responses",
+        help="JSON containing ordered archived stage responses; replay only, not model evidence.",
+    )
+    llm_as_bt_run.add_argument(
+        "--human-feedback",
+        help="For --scheme human, JSON mapping subgoal ids to ordered feedback strings.",
+    )
+    llm_as_bt_run.add_argument(
+        "--output",
+        default=str(PROJECT_ROOT / "outputs" / "comparison" / "llm-as-bt-planner" / "runs"),
+    )
+    llm_as_bt_run.add_argument("--max-iterations", type=int, default=5)
+    llm_as_bt_run.add_argument("--max-recursive-depth", type=int, default=12)
+    llm_as_bt_run.add_argument("--max-recursive-expansions", type=int, default=80)
+    llm_as_bt_run.add_argument("--max-ticks", type=int, default=160)
+    llm_as_bt_run.add_argument("--seed", type=int, default=42)
+    llm_as_bt_run.add_argument(
+        "--use-saved-key",
+        action="store_true",
+        help="Use the selected provider key explicitly saved by the UI.",
+    )
+    llm_as_bt_run.set_defaults(func=_cmd_llm_as_bt_run)
+
+    llm_bt = methods.add_parser(
+        "llm-bt",
+        help="ChatGPT reasoning, released BERT parsing, and deterministic adaptive BT expansion.",
+    )
+    llm_bt_actions = llm_bt.add_subparsers(dest="comparison_action", required=True)
+    llm_bt_prepare = llm_bt_actions.add_parser(
+        "prepare",
+        help="Download and verify the pinned official method files and released BERT parser.",
+    )
+    llm_bt_prepare.add_argument(
+        "--output",
+        default=str(PROJECT_ROOT / "outputs" / "comparison" / "llm-bt" / "source"),
+    )
+    llm_bt_prepare.add_argument("--force", action="store_true")
+    llm_bt_prepare.add_argument(
+        "--without-parser-model",
+        action="store_true",
+        help="Prepare source provenance only, omitting the 265 MB released checkpoint.",
+    )
+    llm_bt_prepare.set_defaults(func=_cmd_llm_bt_prepare)
+
+    llm_bt_run = llm_bt_actions.add_parser(
+        "run",
+        help="Reason once, parse goals with BERT, expand the ATL, and evaluate nominal execution.",
+    )
+    llm_bt_run.add_argument("--scenario", default=str(DEFAULT_SCENARIO))
+    llm_bt_run.add_argument(
+        "--model",
+        default="gpt-3.5-turbo",
+        help="ChatGPT model; the paper does not report a model version, so every run records this choice.",
+    )
+    llm_bt_run.add_argument(
+        "--responses",
+        help="Archived reasoning response plus NER predictions; replay only, not model evidence.",
+    )
+    llm_bt_run.add_argument(
+        "--source",
+        default=str(PROJECT_ROOT / "outputs" / "comparison" / "llm-bt" / "source"),
+    )
+    llm_bt_run.add_argument(
+        "--output",
+        default=str(PROJECT_ROOT / "outputs" / "comparison" / "llm-bt" / "runs"),
+    )
+    llm_bt_run.add_argument("--max-ticks", type=int, default=160)
+    llm_bt_run.add_argument("--seed", type=int, default=42)
+    llm_bt_run.add_argument(
+        "--use-saved-key",
+        action="store_true",
+        help="Use the OpenAI key explicitly saved by the UI.",
+    )
+    llm_bt_run.set_defaults(func=_cmd_llm_bt_run)
+
+    llm_bt_recover = llm_bt_actions.add_parser(
+        "recover",
+        help="Re-expand nominal parsed goals from a standardized post-failure snapshot without an LLM call.",
+    )
+    llm_bt_recover.add_argument("--scenario", default=str(RECOVERY_SCENARIO))
+    llm_bt_recover.add_argument(
+        "--nominal-run",
+        required=True,
+        help="Completed LLM-BT nominal run directory containing native/parsed_goals.json.",
+    )
+    llm_bt_recover.add_argument(
+        "--failure-snapshot",
+        required=True,
+        help="JSON containing measured_initial_state and failure_observation.",
+    )
+    llm_bt_recover.add_argument(
+        "--output",
+        default=str(PROJECT_ROOT / "outputs" / "comparison" / "llm-bt" / "recovery"),
+    )
+    llm_bt_recover.add_argument("--max-ticks", type=int, default=160)
+    llm_bt_recover.set_defaults(func=_cmd_llm_bt_recover)
+
+    betr_xp = methods.add_parser(
+        "betr-xp-llm",
+        help="Formal LLM goals, reactive backchaining, and failure-time error resolution.",
+    )
+    betr_xp_actions = betr_xp.add_subparsers(dest="comparison_action", required=True)
+    betr_xp_prepare = betr_xp_actions.add_parser(
+        "prepare",
+        help="Download, hash, and verify the pinned official BSD-licensed source.",
+    )
+    betr_xp_prepare.add_argument(
+        "--output",
+        default=str(PROJECT_ROOT / "outputs" / "comparison" / "betr-xp-llm" / "source"),
+    )
+    betr_xp_prepare.add_argument("--force", action="store_true")
+    betr_xp_prepare.set_defaults(func=_cmd_betr_xp_prepare)
+
+    betr_xp_run = betr_xp_actions.add_parser(
+        "run",
+        help="Formalize the task goal once, generate the reactive policy, and evaluate it.",
+    )
+    betr_xp_run.add_argument("--scenario", default=str(DEFAULT_SCENARIO))
+    betr_xp_run.add_argument(
+        "--model",
+        default="gpt-4-1106-preview",
+        help="The paper used GPT-4-1106-Preview; availability depends on the provider account.",
+    )
+    betr_xp_run.add_argument(
+        "--responses",
+        help="JSON with an archived goal_response; replay only, not real-model evidence.",
+    )
+    betr_xp_run.add_argument(
+        "--source",
+        default=str(PROJECT_ROOT / "outputs" / "comparison" / "betr-xp-llm" / "source"),
+        help="Prepared official source root, verified before real-model inference.",
+    )
+    betr_xp_run.add_argument(
+        "--output",
+        default=str(PROJECT_ROOT / "outputs" / "comparison" / "betr-xp-llm" / "runs"),
+    )
+    betr_xp_run.add_argument("--max-ticks", type=int, default=160)
+    betr_xp_run.add_argument("--seed", type=int, default=None)
+    betr_xp_run.add_argument("--use-saved-key", action="store_true")
+    betr_xp_run.set_defaults(func=_cmd_betr_xp_run)
+
+    betr_xp_recover = betr_xp_actions.add_parser(
+        "recover",
+        help="Resolve the failed pickup parameter with the LLM and regenerate the continuation.",
+    )
+    betr_xp_recover.add_argument("--scenario", default=str(RECOVERY_SCENARIO))
+    betr_xp_recover.add_argument(
+        "--nominal-run",
+        required=True,
+        help="Completed BETR-XP-LLM nominal run directory.",
+    )
+    betr_xp_recover.add_argument(
+        "--failure-snapshot",
+        required=True,
+        help="JSON containing measured_initial_state and failure_observation.",
+    )
+    betr_xp_recover.add_argument(
+        "--model",
+        default="gpt-4-1106-preview",
+        help="The paper used GPT-4-1106-Preview; availability depends on the provider account.",
+    )
+    betr_xp_recover.add_argument(
+        "--responses",
+        help="JSON with an archived recovery_response; replay only, not real-model evidence.",
+    )
+    betr_xp_recover.add_argument(
+        "--source",
+        default=str(PROJECT_ROOT / "outputs" / "comparison" / "betr-xp-llm" / "source"),
+        help="Prepared official source root, verified before real-model inference.",
+    )
+    betr_xp_recover.add_argument(
+        "--output",
+        default=str(PROJECT_ROOT / "outputs" / "comparison" / "betr-xp-llm" / "recovery"),
+    )
+    betr_xp_recover.add_argument("--max-ticks", type=int, default=160)
+    betr_xp_recover.add_argument("--seed", type=int, default=None)
+    betr_xp_recover.add_argument("--use-saved-key", action="store_true")
+    betr_xp_recover.set_defaults(func=_cmd_betr_xp_recover)
+
+    llm_hbt = methods.add_parser(
+        "llm-hbt",
+        help="Dynamic LLM condition initialization, Alex assignment, and online BT updates.",
+    )
+    llm_hbt_actions = llm_hbt.add_subparsers(dest="comparison_action", required=True)
+    llm_hbt_prepare = llm_hbt_actions.add_parser(
+        "prepare",
+        help="Pin the arXiv v1 source and author project page (official code is unavailable).",
+    )
+    llm_hbt_prepare.add_argument(
+        "--output",
+        default=str(PROJECT_ROOT / "outputs" / "comparison" / "llm-hbt" / "source"),
+    )
+    llm_hbt_prepare.add_argument("--force", action="store_true")
+    llm_hbt_prepare.set_defaults(func=_cmd_llm_hbt_prepare)
+
+    llm_hbt_run = llm_hbt_actions.add_parser(
+        "run",
+        help="Initialize conditions with an LLM and construct the nominal heterogeneous BT forest.",
+    )
+    llm_hbt_run.add_argument("--scenario", default=str(DEFAULT_SCENARIO))
+    llm_hbt_run.add_argument("--provider", choices=["openai", "anthropic"], default="openai")
+    llm_hbt_run.add_argument(
+        "--model",
+        default="gpt-4o-2024-08-06",
+        help=(
+            "Reproduction model; the LLM-HBT paper does not identify its model, so the "
+            "selected value is recorded as a reproduction choice."
+        ),
+    )
+    llm_hbt_run.add_argument(
+        "--responses",
+        help="JSON containing ordered archived native decisions; replay only, not model evidence.",
+    )
+    llm_hbt_run.add_argument(
+        "--source",
+        default=str(PROJECT_ROOT / "outputs" / "comparison" / "llm-hbt" / "source"),
+        help="Prepared provenance root, verified before real-model inference.",
+    )
+    llm_hbt_run.add_argument(
+        "--output",
+        default=str(PROJECT_ROOT / "outputs" / "comparison" / "llm-hbt" / "runs"),
+    )
+    llm_hbt_run.add_argument("--max-extensions", type=int, default=100)
+    llm_hbt_run.add_argument("--max-ticks", type=int, default=160)
+    llm_hbt_run.add_argument("--seed", type=int, default=42)
+    llm_hbt_run.add_argument("--use-saved-key", action="store_true")
+    llm_hbt_run.set_defaults(func=_cmd_llm_hbt_run)
+
+    llm_hbt_recover = llm_hbt_actions.add_parser(
+        "recover",
+        help="Detect a standardized runtime failure and let the LLM construct recovery updates.",
+    )
+    llm_hbt_recover.add_argument("--scenario", default=str(RECOVERY_SCENARIO))
+    llm_hbt_recover.add_argument(
+        "--nominal-run",
+        required=True,
+        help="Completed LLM-HBT nominal run directory whose initial conditions are reused.",
+    )
+    llm_hbt_recover.add_argument(
+        "--failure-snapshot",
+        required=True,
+        help="JSON containing measured_initial_state and failure_observation.",
+    )
+    llm_hbt_recover.add_argument(
+        "--provider",
+        choices=["openai", "anthropic"],
+        default="openai",
+    )
+    llm_hbt_recover.add_argument(
+        "--model",
+        default="gpt-4o-2024-08-06",
+        help="Reproduction model; the paper's model is not reported.",
+    )
+    llm_hbt_recover.add_argument(
+        "--responses",
+        help="JSON containing ordered archived post-failure decisions; replay only.",
+    )
+    llm_hbt_recover.add_argument(
+        "--source",
+        default=str(PROJECT_ROOT / "outputs" / "comparison" / "llm-hbt" / "source"),
+        help="Prepared provenance root, verified before real-model inference.",
+    )
+    llm_hbt_recover.add_argument(
+        "--output",
+        default=str(PROJECT_ROOT / "outputs" / "comparison" / "llm-hbt" / "recovery"),
+    )
+    llm_hbt_recover.add_argument("--max-extensions", type=int, default=100)
+    llm_hbt_recover.add_argument("--max-ticks", type=int, default=160)
+    llm_hbt_recover.add_argument("--seed", type=int, default=42)
+    llm_hbt_recover.add_argument("--use-saved-key", action="store_true")
+    llm_hbt_recover.set_defaults(func=_cmd_llm_hbt_recover)
+
+    mrbtp = methods.add_parser(
+        "mrbtp",
+        help="Non-LLM FIFO multi-robot BT planning with cross-tree expansion.",
+    )
+    mrbtp_actions = mrbtp.add_subparsers(dest="comparison_action", required=True)
+    mrbtp_prepare = mrbtp_actions.add_parser(
+        "prepare",
+        help="Download, hash, license-check, and extract the pinned official MRBTP source.",
+    )
+    mrbtp_prepare.add_argument(
+        "--output",
+        default=str(PROJECT_ROOT / "outputs" / "comparison" / "mrbtp" / "source"),
+    )
+    mrbtp_prepare.add_argument("--force", action="store_true")
+    mrbtp_prepare.set_defaults(func=_cmd_mrbtp_prepare)
+
+    mrbtp_run = mrbtp_actions.add_parser(
+        "run",
+        help="Run FIFO MRBTP without its optional LLM composite-action plugin.",
+    )
+    mrbtp_run.add_argument("--scenario", default=str(RECOVERY_SCENARIO))
+    mrbtp_run.add_argument(
+        "--source",
+        default=str(PROJECT_ROOT / "outputs" / "comparison" / "mrbtp" / "source"),
+        help="Prepared official source root; every run verifies it before planning.",
+    )
+    mrbtp_run.add_argument(
+        "--output",
+        default=str(PROJECT_ROOT / "outputs" / "comparison" / "mrbtp" / "runs"),
+    )
+    mrbtp_run.add_argument("--max-expansions", type=int, default=10_000)
+    mrbtp_run.add_argument("--max-ticks", type=int, default=300)
+    mrbtp_run.set_defaults(func=_cmd_mrbtp_run)
     return parser
 
 
@@ -406,6 +750,413 @@ def _cmd_adaptive_demo(args: argparse.Namespace) -> int:
             ) from error
         raise
     return run_adaptive_demo_cli(args)
+
+
+def _cmd_llm_as_bt_prepare(args: argparse.Namespace) -> int:
+    from .comparison.llm_as_bt_source import prepare_official_source
+
+    prepared = prepare_official_source(args.output, force=args.force)
+    print(f"Source:   {prepared.source.resolve()}")
+    print(f"Files:    {prepared.file_count}")
+    print(f"Manifest: {prepared.manifest.resolve()}")
+    print("License:  MIT")
+    return 0
+
+
+def _cmd_llm_as_bt_run(args: argparse.Namespace) -> int:
+    from .comparison.llm_as_bt import (
+        LLMAsBTGenerator,
+        ProviderGenerator,
+        ReplayGenerator,
+        load_human_feedback,
+        run_llm_as_bt_planner,
+    )
+
+    scenario = load_scenario(args.scenario, strict=True)
+    generator: LLMAsBTGenerator
+    if args.responses:
+        generator = ReplayGenerator.from_file(args.responses)
+        print("Mode: archived ordered KIOS replay (not real model evidence)")
+    else:
+        generator = ProviderGenerator(
+            args.provider,
+            args.model,
+            _provider_key(args.provider, args.use_saved_key),
+            seed=args.seed,
+        )
+    feedback = load_human_feedback(args.human_feedback) if args.human_feedback else None
+    if feedback and args.scheme != "human":
+        raise ValueError("--human-feedback is valid only with --scheme human.")
+    result = run_llm_as_bt_planner(
+        scenario,
+        generator,
+        args.output,
+        scheme=args.scheme,
+        max_iterations=args.max_iterations,
+        human_feedback=feedback,
+        max_recursive_depth=args.max_recursive_depth,
+        max_recursive_expansions=args.max_recursive_expansions,
+        max_ticks=args.max_ticks,
+        invocation=args.invocation,
+    )
+    print(f"Artifacts: {result.directory.resolve()}")
+    print(f"Native:    {(result.directory / 'native').resolve()}")
+    print(f"Canonical: {result.canonical_plan.resolve()}")
+    print(f"PS:        {'pass' if result.plan_generation_success else 'fail'}")
+    print(f"SV:        {'pass' if result.static_validity else 'fail'}")
+    print(f"GS:        {'pass' if result.symbolic_goal_success else 'fail'}")
+    if result.accepted_plan is None:
+        print("Accepted:  no; no MuJoCo-ready plan was published")
+    else:
+        print(f"Accepted:  {result.accepted_plan.resolve()}")
+    return 0 if (
+        result.plan_generation_success and result.static_validity and result.symbolic_goal_success
+    ) else 1
+
+
+def _cmd_llm_bt_prepare(args: argparse.Namespace) -> int:
+    from .comparison.llm_bt_source import prepare_official_source
+
+    prepared = prepare_official_source(
+        args.output,
+        force=args.force,
+        include_parser_model=not args.without_parser_model,
+    )
+    print(f"Source:   {prepared.source.resolve()}")
+    print(f"Files:    {prepared.file_count}")
+    print(f"Parser:   {prepared.parser.resolve()}")
+    print(f"Weights:  {'included (265 MB)' if prepared.parser_model_included else 'omitted'}")
+    print(f"Manifest: {prepared.manifest.resolve()}")
+    print("License:  no project-wide software/model license declared upstream")
+    return 0
+
+
+def _cmd_llm_bt_run(args: argparse.Namespace) -> int:
+    from .comparison.llm_bt import (
+        ProviderReasoner,
+        Reasoner,
+        load_replay_bundle,
+        run_llm_bt,
+    )
+    from .comparison.llm_bt_parser import KeywordParser
+
+    scenario = load_scenario(args.scenario, strict=True)
+    reasoner: Reasoner
+    keyword_parser: KeywordParser
+    if args.responses:
+        reasoner, keyword_parser = load_replay_bundle(args.responses)
+        print("Mode: archived LLM-BT reasoning/NER replay (not real model evidence)")
+    else:
+        from .comparison.llm_bt_parser import TransformersKeywordParser
+        from .comparison.llm_bt_source import parser_directory, verify_prepared_source
+
+        verify_prepared_source(args.source, require_parser_model=True)
+        reasoner = ProviderReasoner(
+            args.model,
+            _provider_key("openai", args.use_saved_key),
+            seed=args.seed,
+        )
+        keyword_parser = TransformersKeywordParser(parser_directory(args.source))
+        print(f"Mode: ChatGPT reasoning ({args.model}) plus released DistilBERT parser")
+    result = run_llm_bt(
+        scenario,
+        reasoner,
+        keyword_parser,
+        args.output,
+        max_ticks=args.max_ticks,
+        invocation=args.invocation,
+    )
+    return _print_llm_bt_result(result)
+
+
+def _cmd_llm_bt_recover(args: argparse.Namespace) -> int:
+    from .comparison.llm_bt import run_llm_bt_recovery
+    from .recovery import build_runtime_recovery_scenario
+
+    scenario = load_scenario(args.scenario, strict=True)
+    document = json.loads(Path(args.failure_snapshot).read_text(encoding="utf-8"))
+    measured = document.get("measured_initial_state") if isinstance(document, dict) else None
+    observation = document.get("failure_observation") if isinstance(document, dict) else None
+    if not isinstance(measured, list) or not all(isinstance(item, str) for item in measured):
+        raise ValueError("failure snapshot requires a measured_initial_state string array.")
+    if not isinstance(observation, dict):
+        raise ValueError("failure snapshot requires a failure_observation object.")
+    runtime_scenario = build_runtime_recovery_scenario(
+        scenario,
+        measured_initial_state=tuple(measured),
+        failure_observation=observation,
+    )
+    print("Mode: deterministic LLM-BT runtime ATL expansion (LLM and BERT are not recalled)")
+    result = run_llm_bt_recovery(
+        runtime_scenario,
+        args.nominal_run,
+        document,
+        args.output,
+        max_ticks=args.max_ticks,
+        invocation=args.invocation,
+    )
+    return _print_llm_bt_result(result, recovery=True)
+
+
+def _print_llm_bt_result(result, *, recovery: bool = False) -> int:
+    print(f"Artifacts: {result.directory.resolve()}")
+    print(f"Native:    {(result.directory / 'native').resolve()}")
+    print(f"Canonical: {result.canonical_plan.resolve()}")
+    labels = ("RPS", "RV", "RGS") if recovery else ("PS", "SV", "GS")
+    print(f"{labels[0]}:       {'pass' if result.plan_generation_success else 'fail'}")
+    print(f"{labels[1]}:        {'pass' if result.static_validity else 'fail'}")
+    print(f"{labels[2]}:        {'pass' if result.symbolic_goal_success else 'fail'}")
+    if result.accepted_plan is None:
+        print("Accepted:  no; no MuJoCo-ready plan was published")
+    else:
+        print(f"Accepted:  {result.accepted_plan.resolve()}")
+    return 0 if (
+        result.plan_generation_success and result.static_validity and result.symbolic_goal_success
+    ) else 1
+
+
+def _cmd_betr_xp_prepare(args: argparse.Namespace) -> int:
+    from .comparison.betr_xp_source import prepare_official_source
+
+    prepared = prepare_official_source(args.output, force=args.force)
+    print(f"Source:   {prepared.source.resolve()}")
+    print(f"Files:    {prepared.file_count}")
+    print(f"Archive:  {prepared.archive.resolve()}")
+    print(f"Manifest: {prepared.manifest.resolve()}")
+    print("License:  BSD-3-Clause; copyright (c) 2024, ABB")
+    return 0
+
+
+def _cmd_betr_xp_run(args: argparse.Namespace) -> int:
+    from .comparison.betr_xp import BetrXPCaller, ProviderCaller, ReplayCaller, run_betr_xp
+
+    scenario = load_scenario(args.scenario, strict=True)
+    caller: BetrXPCaller
+    if args.responses:
+        caller = ReplayCaller.from_file(args.responses)
+        print("Mode: archived BETR-XP-LLM goal response replay (not real model evidence)")
+    else:
+        from .comparison.betr_xp_source import verify_prepared_source
+
+        verify_prepared_source(args.source)
+        caller = ProviderCaller(
+            args.model,
+            _provider_key("openai", args.use_saved_key),
+            seed=args.seed,
+        )
+        print(f"Mode: one formal-goal OpenAI call ({args.model}) plus reactive backchaining")
+    result = run_betr_xp(
+        scenario,
+        caller,
+        args.output,
+        max_ticks=args.max_ticks,
+        invocation=args.invocation,
+    )
+    return _print_betr_xp_result(result)
+
+
+def _cmd_betr_xp_recover(args: argparse.Namespace) -> int:
+    from .comparison.betr_xp import (
+        BetrXPCaller,
+        ProviderCaller,
+        ReplayCaller,
+        run_betr_xp_recovery,
+    )
+    from .recovery import build_runtime_recovery_scenario
+
+    scenario = load_scenario(args.scenario, strict=True)
+    document = json.loads(Path(args.failure_snapshot).read_text(encoding="utf-8"))
+    measured = document.get("measured_initial_state") if isinstance(document, dict) else None
+    observation = document.get("failure_observation") if isinstance(document, dict) else None
+    if not isinstance(measured, list) or not all(isinstance(item, str) for item in measured):
+        raise ValueError("failure snapshot requires a measured_initial_state string array.")
+    if not isinstance(observation, dict):
+        raise ValueError("failure snapshot requires a failure_observation object.")
+    runtime_scenario = build_runtime_recovery_scenario(
+        scenario,
+        measured_initial_state=tuple(measured),
+        failure_observation=observation,
+    )
+    caller: BetrXPCaller
+    if args.responses:
+        caller = ReplayCaller.from_file(args.responses)
+        print("Mode: archived BETR-XP-LLM failure-resolution replay (not real model evidence)")
+    else:
+        from .comparison.betr_xp_source import verify_prepared_source
+
+        verify_prepared_source(args.source)
+        caller = ProviderCaller(
+            args.model,
+            _provider_key("openai", args.use_saved_key),
+            seed=args.seed,
+        )
+        print(f"Mode: post-failure OpenAI parameter resolution ({args.model}) and replanning")
+    result = run_betr_xp_recovery(
+        runtime_scenario,
+        args.nominal_run,
+        document,
+        caller,
+        args.output,
+        max_ticks=args.max_ticks,
+        invocation=args.invocation,
+    )
+    return _print_betr_xp_result(result, recovery=True)
+
+
+def _print_betr_xp_result(result, *, recovery: bool = False) -> int:
+    print(f"Artifacts: {result.directory.resolve()}")
+    print(f"Native:    {(result.directory / 'native').resolve()}")
+    print(f"Canonical: {result.canonical_plan.resolve()}")
+    labels = ("RPS", "RV", "RGS") if recovery else ("PS", "SV", "GS")
+    print(f"{labels[0]}:       {'pass' if result.plan_generation_success else 'fail'}")
+    print(f"{labels[1]}:        {'pass' if result.static_validity else 'fail'}")
+    print(f"{labels[2]}:        {'pass' if result.symbolic_goal_success else 'fail'}")
+    if result.accepted_plan is None:
+        print("Accepted:  no; no MuJoCo-ready plan was published")
+    else:
+        print(f"Accepted:  {result.accepted_plan.resolve()}")
+    return 0 if (
+        result.plan_generation_success and result.static_validity and result.symbolic_goal_success
+    ) else 1
+
+
+def _cmd_llm_hbt_prepare(args: argparse.Namespace) -> int:
+    from .comparison.llm_hbt_source import prepare_official_source
+
+    prepared = prepare_official_source(args.output, force=args.force)
+    print(f"Source:   {prepared.source.resolve()}")
+    print(f"Files:    {prepared.file_count}")
+    print(f"Project:  {prepared.project_archive.resolve()}")
+    print(f"Paper:    {prepared.paper_archive.resolve()}")
+    print(f"Manifest: {prepared.manifest.resolve()}")
+    print("Code:     not released; author project page says Coming Soon")
+    return 0
+
+
+def _llm_hbt_generator(args: argparse.Namespace):
+    from .comparison.llm_hbt import ProviderGenerator, ReplayGenerator
+
+    if args.responses:
+        print("Mode: archived ordered LLM-HBT decision replay (not real model evidence)")
+        return ReplayGenerator.from_file(args.responses)
+    from .comparison.llm_hbt_source import verify_prepared_source
+
+    verify_prepared_source(args.source)
+    print(
+        f"Mode: live {args.provider} LLM-HBT reproduction ({args.model}); "
+        "the paper model was not reported"
+    )
+    return ProviderGenerator(
+        args.provider,
+        args.model,
+        _provider_key(args.provider, args.use_saved_key),
+        seed=args.seed,
+    )
+
+
+def _cmd_llm_hbt_run(args: argparse.Namespace) -> int:
+    from .comparison.llm_hbt import run_llm_hbt
+
+    scenario = load_scenario(args.scenario, strict=True)
+    result = run_llm_hbt(
+        scenario,
+        _llm_hbt_generator(args),
+        args.output,
+        max_extensions=args.max_extensions,
+        max_ticks=args.max_ticks,
+        invocation=args.invocation,
+    )
+    return _print_llm_hbt_result(result)
+
+
+def _cmd_llm_hbt_recover(args: argparse.Namespace) -> int:
+    from .comparison.llm_hbt import run_llm_hbt_recovery
+    from .recovery import build_runtime_recovery_scenario
+
+    scenario = load_scenario(args.scenario, strict=True)
+    document = json.loads(Path(args.failure_snapshot).read_text(encoding="utf-8"))
+    measured = document.get("measured_initial_state") if isinstance(document, dict) else None
+    observation = document.get("failure_observation") if isinstance(document, dict) else None
+    if not isinstance(measured, list) or not all(isinstance(item, str) for item in measured):
+        raise ValueError("failure snapshot requires a measured_initial_state string array.")
+    if not isinstance(observation, dict):
+        raise ValueError("failure snapshot requires a failure_observation object.")
+    runtime_scenario = build_runtime_recovery_scenario(
+        scenario,
+        measured_initial_state=tuple(measured),
+        failure_observation=observation,
+    )
+    result = run_llm_hbt_recovery(
+        runtime_scenario,
+        args.nominal_run,
+        document,
+        _llm_hbt_generator(args),
+        args.output,
+        max_extensions=args.max_extensions,
+        max_ticks=args.max_ticks,
+        invocation=args.invocation,
+    )
+    return _print_llm_hbt_result(result, recovery=True)
+
+
+def _print_llm_hbt_result(result, *, recovery: bool = False) -> int:
+    print(f"Artifacts: {result.directory.resolve()}")
+    print(f"Native:    {(result.directory / 'native').resolve()}")
+    print(f"Canonical: {result.canonical_plan.resolve()}")
+    labels = ("RPS", "RV", "RGS") if recovery else ("PS", "SV", "GS")
+    print(f"{labels[0]}:       {'pass' if result.plan_generation_success else 'fail'}")
+    print(f"{labels[1]}:        {'pass' if result.static_validity else 'fail'}")
+    print(f"{labels[2]}:        {'pass' if result.symbolic_goal_success else 'fail'}")
+    if result.accepted_plan is None:
+        print("Accepted:  no; no MuJoCo-ready plan was published")
+    else:
+        print(f"Accepted:  {result.accepted_plan.resolve()}")
+    return 0 if (
+        result.plan_generation_success and result.static_validity and result.symbolic_goal_success
+    ) else 1
+
+
+def _cmd_mrbtp_prepare(args: argparse.Namespace) -> int:
+    from .comparison.mrbtp_source import prepare_official_source
+
+    prepared = prepare_official_source(args.output, force=args.force)
+    print(f"Source:   {prepared.source.resolve()}")
+    print(f"Files:    {prepared.file_count}")
+    print(f"Archive:  {prepared.archive.resolve()}")
+    print(f"Manifest: {prepared.manifest.resolve()}")
+    print("License:  MIT; copyright (c) 2024 MABTPG")
+    return 0
+
+
+def _cmd_mrbtp_run(args: argparse.Namespace) -> int:
+    from .comparison.mrbtp import run_mrbtp
+    from .comparison.mrbtp_source import verify_prepared_source
+
+    verify_prepared_source(args.source)
+    scenario = load_scenario(args.scenario, strict=True)
+    print("Mode: deterministic FIFO MRBTP; optional LLM subtree plugin disabled")
+    result = run_mrbtp(
+        scenario,
+        args.output,
+        max_expansions=args.max_expansions,
+        max_ticks=args.max_ticks,
+        invocation=args.invocation,
+        verified_source_manifest=Path(args.source) / "source_manifest.json",
+    )
+    print(f"Artifacts: {result.directory.resolve()}")
+    print(f"Native:    {(result.directory / 'native').resolve()}")
+    print(f"Canonical: {result.canonical_plan.resolve()}")
+    print(f"PS:        {'pass' if result.plan_generation_success else 'fail'}")
+    print(f"SV:        {'pass' if result.static_validity else 'fail'}")
+    print(f"GS:        {'pass' if result.symbolic_goal_success else 'fail'}")
+    print("LLM calls: 0")
+    if result.accepted_plan is None:
+        print("Accepted:  no; no MuJoCo-ready plan was published")
+    else:
+        print(f"Accepted:  {result.accepted_plan.resolve()}")
+    return 0 if (
+        result.plan_generation_success and result.static_validity and result.symbolic_goal_success
+    ) else 1
 
 
 def _provider_key(provider: str, use_saved: bool) -> str:

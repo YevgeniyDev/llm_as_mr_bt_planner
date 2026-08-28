@@ -42,15 +42,32 @@ class ValidationReport:
         return [error.to_dict() for error in self.errors]
 
 
-def validate_plan(plan: Plan, scenario: Scenario, suggest_producers: bool = False) -> ValidationReport:
+def validate_plan(
+    plan: Plan,
+    scenario: Scenario,
+    suggest_producers: bool = False,
+    *,
+    allowed_sources: frozenset[str] | None = None,
+    validation_profile: str = "direct",
+) -> ValidationReport:
     """Validate ``plan`` against ``scenario``.
 
     The checks are task-agnostic: structure, capability contracts, predicate
     support, causality, synchronization, resources, and liveness. When
     ``suggest_producers`` is enabled, errors may include producer candidates
     derived from declared effects so the correction loop gets actionable data.
+    ``allowed_sources`` and ``reactive_policy`` are explicit comparison-adapter
+    opt-ins; the default direct-generation contract remains LLM-only and applies
+    flattened synchronization and resource checks.
     """
     report = ValidationReport()
+
+    if validation_profile not in {"direct", "reactive_policy"}:
+        report.add(
+            "invalid_validation_profile",
+            f"Unknown validation profile '{validation_profile}'.",
+        )
+        return report
 
     _validate_raw_schema(plan, report)
     for field_name in plan.missing_fields():
@@ -61,10 +78,16 @@ def validate_plan(plan: Plan, scenario: Scenario, suggest_producers: bool = Fals
         return report
 
     _validate_behavior_trees(plan, scenario, report)
-    _validate_direct_bt_contract(plan, scenario, report)
+    _validate_direct_bt_contract(
+        plan,
+        scenario,
+        report,
+        allowed_sources=allowed_sources or frozenset({"llm"}),
+    )
     _validate_predicate_support(plan, scenario, report, suggest_producers)
-    _validate_explicit_waits(plan, scenario, report)
-    _validate_resources(plan, scenario, report)
+    if validation_profile == "direct":
+        _validate_explicit_waits(plan, scenario, report)
+        _validate_resources(plan, scenario, report)
     return report
 
 
@@ -242,17 +265,15 @@ def _validate_predicate_support(
         if robot is None:
             continue
         leaves = list(iter_leaves(tree))
-        for index, leaf in enumerate(leaves):
+        for leaf in leaves:
             if leaf.type in {"Condition", "WaitFor"}:
-                _check_condition(robot_id, leaves, index, leaf, scenario, initial_state, produced, report, suggest_producers)
+                _check_condition(robot_id, leaf, scenario, initial_state, produced, report, suggest_producers)
             elif leaf.type == "Action":
                 _check_action_preconditions(robot_id, leaf, scenario, initial_state, produced, report, suggest_producers)
 
 
 def _check_condition(
     robot_id: str,
-    leaves: list[BTNode],
-    index: int,
     leaf: BTNode,
     scenario: Scenario,
     initial_state: set[str],
@@ -261,10 +282,7 @@ def _check_condition(
     suggest_producers: bool,
 ) -> None:
     predicate = leaf.label()
-    initially = predicate in initial_state
-    if initially or predicate in produced:
-        if not initially and leaf.type == "Condition":
-            _check_condition_after_producer(robot_id, leaves, index, predicate, scenario, report)
+    if predicate in initial_state or predicate in produced:
         return
     report.add(
         "unsupported_condition" if leaf.type == "Condition" else "unsupported_wait",
@@ -272,23 +290,6 @@ def _check_condition(
         f"{_same_name_text(predicate, initial_state | produced, suggest_producers)}"
         f"{_candidate_text(candidate_producers(predicate, scenario), suggest_producers)}",
     )
-
-
-def _check_condition_after_producer(
-    robot_id: str,
-    leaves: list[BTNode],
-    condition_index: int,
-    predicate: str,
-    scenario: Scenario,
-    report: ValidationReport,
-) -> None:
-    producer_index = _producer_index(leaves, robot_id, predicate, scenario)
-    if producer_index is not None and condition_index < producer_index:
-        report.add(
-            "condition_before_producer",
-            f"Robot '{robot_id}' waits for '{predicate}' before its own BT action creates it.",
-        )
-
 
 def _check_action_preconditions(
     robot_id: str,
@@ -335,7 +336,13 @@ def produced_predicates(plan: Plan, scenario: Scenario) -> set[str]:
 # --------------------------------------------------------------------------- #
 
 
-def _validate_direct_bt_contract(plan: Plan, scenario: Scenario, report: ValidationReport) -> None:
+def _validate_direct_bt_contract(
+    plan: Plan,
+    scenario: Scenario,
+    report: ValidationReport,
+    *,
+    allowed_sources: frozenset[str],
+) -> None:
     if plan.schema_version != "2.0":
         report.add("unsupported_schema_version", f"Unsupported plan schema_version '{plan.schema_version}'.")
     if plan.mission_id != scenario.task_id:
@@ -393,8 +400,11 @@ def _validate_direct_bt_contract(plan: Plan, scenario: Scenario, report: Validat
                                     f"Action '{node.label()}' parameter '{parameter}' must have type "
                                     f"'{expected_type}', got '{actual_type or 'unknown'}'.",
                                 )
-                    if node.source != "llm":
-                        report.add("invalid_provenance", f"Action '{node.label()}' must have source 'llm'.")
+                    if node.source not in allowed_sources:
+                        report.add(
+                            "invalid_provenance",
+                            f"Action '{node.label()}' must have source in {sorted(allowed_sources)}.",
+                        )
             elif node.type in {"Condition", "WaitFor"} and node.name:
                 expected = signatures.get(node.name)
                 if expected is None:
@@ -410,15 +420,24 @@ def _validate_direct_bt_contract(plan: Plan, scenario: Scenario, report: Validat
                         "unknown_constant",
                         f"{node.type} '{node.label()}' uses unknown constant(s): {', '.join(unknown)}.",
                     )
-                if node.source != "llm":
-                    report.add("invalid_provenance", f"{node.type} '{node.label()}' must have source 'llm'.")
+                if node.source not in allowed_sources:
+                    report.add(
+                        "invalid_provenance",
+                        f"{node.type} '{node.label()}' must have source in {sorted(allowed_sources)}.",
+                    )
             elif node.type in {"AcquireResource", "ReleaseResource"}:
                 if node.name not in scenario.resource_ids:
                     report.add("unknown_resource", f"{node.type} uses undeclared resource '{node.name}'.")
-                if node.source != "llm":
-                    report.add("invalid_provenance", f"{node.type} '{node.name}' must have source 'llm'.")
-            elif node.type in COMPOSITES and node.source != "llm":
-                report.add("invalid_provenance", f"Composite node '{node.node_id}' must have source 'llm'.")
+                if node.source not in allowed_sources:
+                    report.add(
+                        "invalid_provenance",
+                        f"{node.type} '{node.name}' must have source in {sorted(allowed_sources)}.",
+                    )
+            elif node.type in COMPOSITES and node.source not in allowed_sources:
+                report.add(
+                    "invalid_provenance",
+                    f"Composite node '{node.node_id}' must have source in {sorted(allowed_sources)}.",
+                )
 
 
 def _predicate_signatures(scenario: Scenario) -> dict[str, int]:
@@ -591,19 +610,6 @@ def _wait_cycle(edges: dict[str, set[str]]) -> list[str]:
 # --------------------------------------------------------------------------- #
 # Helpers
 # --------------------------------------------------------------------------- #
-
-
-def _producer_index(leaves: list[BTNode], robot_id: str, target: str, scenario: Scenario) -> int | None:
-    for index, leaf in enumerate(leaves):
-        if leaf.type != "Action":
-            continue
-        capability = scenario.capability(robot_id, leaf.name or "")
-        if capability is None:
-            continue
-        bindings = dict(zip(capability.parameters, leaf.parameters))
-        if target in positive_effects(capability.effects, bindings):
-            return index
-    return None
 
 
 def _candidate_text(candidates: list[Any], suggest_producers: bool) -> str:

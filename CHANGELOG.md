@@ -2,6 +2,28 @@
 
 All notable changes to the project are recorded here.
 
+## Unreleased
+
+### Added
+
+- Added the first isolated comparison method, LLM-as-BT-Planner, with pinned verification of the authors' MIT-licensed KIOS source and all four reported generation schemes: one-step, iterative native-simulation refinement, archived human feedback, and recursive MakePlan/MakeTree/PredictState expansion.
+- Added strict native KIOS JSON parsing and dummy execution, ordered replay with call-context checks, a non-repairing common observer, complete prompt/native/metric/checksum artifacts, CLI commands, and regression coverage for all four schemes and the full courier protocol.
+- Added the second isolated comparison method, LLM-BT, retaining one pre-execution ChatGPT reasoning call, the authors' released eight-label DistilBERT NER parser, postcondition goal sequences, and deterministic Action Template Library expansion.
+- Added pinned selective preparation and SHA-256 verification for the official LLM-BT source and 265,510,949-byte parser checkpoint, with an explicit record that the repository and parser model declare no project-wide license and the embedded core's MIT license is narrower.
+- Added nominal and dropped-object recovery tracks, replay/CLI support, semantic-map and parser-compatible alias inputs, common multi-robot partitioning, complete expansion/metric/checksum artifacts, and regression tests. Runtime recovery faithfully reuses the nominal parsed goals and performs no post-failure LLM or BERT call.
+- Added the third isolated comparison method, BETR-XP-LLM, retaining one strict first-order goal-formalization call, reactive PDDL-style failed-condition expansion, conflict-priority ordering, and failure-time LLM resolution of missing knowledge.
+- Added pinned BSD-3-Clause source preparation and full-file verification, native goal/policy artifacts, nominal and same-object dropped-part recovery commands, replay support, and regression coverage proving that the resolved pickup-location parameter controls replanning and that incorrect LLM output remains a failed trial.
+- Added the fourth isolated comparison method, LLM-HBT, retaining LLM condition initialization, failed-node queueing, Alex robot assignment, per-robot LLM action selection, and local or delegated online BT extension with requester monitoring.
+- Added pinned verification of the arXiv v1 source and author project page, an explicit unavailable-code/unreported-inference fidelity boundary, nominal and same-object floor-recovery commands, ordered decision replay, complete native/canonical audit artifacts, and tests proving that invalid LLM recovery choices are rejected rather than repaired.
+- Added the fifth isolated comparison method, MRBTP, as the non-LLM nominal reference. Its source-aligned FIFO planner retains per-robot action spaces, shared-queue in-tree/cross-tree expansion, regressed premises, subset/conflict pruning, full native backup forests, and intention-sharing evidence with the optional LLM subtree plugin disabled.
+- Added complete MIT-licensed official-source preparation and verification at pinned commit `3d6bd240aa2903245b2335711a97ee394f174313`, deterministic CLI execution, native/common audit artifacts, zero-call metrics, and tests for the heterogeneous eight-action handoff protocol, failure bounds, source integrity, and provenance isolation.
+
+### Changed
+
+- Narrowed the primary paper comparison to LLM-as-BT-Planner, LLM-BT, BETR-XP-LLM, LLM-HBT, and MRBTP; removed the non-selected LLM-MARS, SMART-LLM, hierarchical mission-tree, BTGenBot, and BTGenBot-2 runners, commands, dependencies, tests, and implementation documentation while retaining their related-work discussion.
+- Corrected static validation of reactive BT goal guards: a `Condition` before an action that can establish it is a valid selector/fallback branch, not an implicit wait-before-producer error. Explicit synchronization remains represented only by `WaitFor`.
+- Added explicit comparison-only validator options for planner-authored provenance and reactive backup policies. The default direct-generation profile remains unchanged and accepts only LLM-authored nodes.
+
 ## 0.7.0 - 2026-08-21
 
 ### Added

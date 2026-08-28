@@ -34,6 +34,10 @@ class OpenAIClient:
         timeout: float | None = None,
         temperature: float | None = None,
         seed: int | None = None,
+        json_mode: bool = True,
+        max_tokens: int | None = None,
+        frequency_penalty: float | None = None,
+        top_p: float | None = None,
     ) -> None:
         self.name = "openai"
         self.model: str = model or os.environ.get("OPENAI_MODEL") or DEFAULT_MODEL
@@ -49,6 +53,10 @@ class OpenAIClient:
         )
         self.temperature = self._temperature
         self.seed = seed
+        self._json_mode = json_mode
+        self._max_tokens = max_tokens
+        self._frequency_penalty = frequency_penalty
+        self._top_p = top_p
         self.response_metadata: list[dict[str, Any]] = []
 
     def set_seed(self, seed: int | None) -> None:
@@ -56,21 +64,57 @@ class OpenAIClient:
         self.seed = seed
 
     def complete(self, system: str, user: str) -> str:
+        result = self.create_chat_completion(
+            [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+        )
+        content = result["choices"][0]["message"].get("content")
+        if not isinstance(content, str):
+            raise LLMError("OpenAI response did not contain text content.")
+        return content
+
+    def create_chat_completion(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        tools: list[dict[str, Any]] | None = None,
+        tool_choice: str | dict[str, Any] | None = None,
+        parallel_tool_calls: bool | None = None,
+    ) -> dict[str, Any]:
+        """Send a raw Chat Completions request, including optional function tools.
+
+        The regular :meth:`complete` surface remains the project's text/JSON
+        convenience API.  Comparison methods that are explicitly defined by
+        function calling use this method so assistant tool-call messages and
+        tool results can be preserved verbatim across rounds.
+        """
         if not self._api_key:
             raise LLMError("OPENAI_API_KEY is not set. Copy .env.example to .env and add a key.")
 
         payload: dict[str, Any] = {
             "model": self.model,
-            "messages": [
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ],
-            "response_format": {"type": "json_object"},
+            "messages": messages,
         }
+        if tools is not None:
+            payload["tools"] = tools
+        if tool_choice is not None:
+            payload["tool_choice"] = tool_choice
+        if parallel_tool_calls is not None:
+            payload["parallel_tool_calls"] = parallel_tool_calls
+        if self._json_mode and tools is None:
+            payload["response_format"] = {"type": "json_object"}
         if self._temperature is not None:
             payload["temperature"] = self._temperature
         if self.seed is not None:
             payload["seed"] = self.seed
+        if self._max_tokens is not None:
+            payload["max_tokens"] = self._max_tokens
+        if self._frequency_penalty is not None:
+            payload["frequency_penalty"] = self._frequency_penalty
+        if self._top_p is not None:
+            payload["top_p"] = self._top_p
         request = urllib.request.Request(
             self._completions_url(),
             data=json.dumps(payload).encode("utf-8"),
@@ -81,7 +125,6 @@ class OpenAIClient:
         body = _send(request, self._timeout)
         elapsed = time.perf_counter() - started
         result = json.loads(body)
-        content = result["choices"][0]["message"]["content"]
         self.response_metadata.append(
             {
                 "response_id": result.get("id"),
@@ -93,7 +136,7 @@ class OpenAIClient:
                 "elapsed_wall_seconds": round(elapsed, 4),
             }
         )
-        return content
+        return result
 
     def _completions_url(self) -> str:
         explicit = os.environ.get("OPENAI_API_URL")
