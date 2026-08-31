@@ -1,0 +1,258 @@
+{
+  "schema_version": "1.0",
+  "task_id": "five_agent_pipe_leak_repair",
+  "instruction": "Detect and repair a seeded leak in the laboratory pipe rig with five coordinated robot controllers. B2 must carry the stowed Z1 thermal-camera arm to the pipe inspection viewpoint. Z1 must deploy, detect and localize the leak from measured thermal evidence, then stow before B2 moves. In parallel, the static Franka Panda must collect the single repair tool and place it in the shared handoff tray. The Franka mounted on Husky must load and secure that tool before Husky moves. After Z1 localizes the leak, Husky must drive to the leak-repair dock with its arm stowed; its mounted Franka must use the supplied tool to close the measured repair collar and return the tool to the Husky rack. Z1 must then verify from a second thermal observation that the leak is repaired. Every shared zone and route must be acquired and released explicitly, no robot may wait while holding a resource, all waits and acquisitions must be bounded, and both mobile platforms and all arms must finish home or stowed.",
+  "initial_state": [
+    "system_ready()",
+    "robot_ready(b2_base)",
+    "robot_ready(z1_thermal_arm)",
+    "robot_ready(husky_base)",
+    "robot_ready(husky_franka)",
+    "robot_ready(static_franka)",
+    "mounted_on(z1_thermal_arm,b2_base)",
+    "mounted_on(husky_franka,husky_base)",
+    "docked(b2_base,b2_home)",
+    "stationary(b2_base)",
+    "stowed(z1_thermal_arm)",
+    "docked(husky_base,husky_home)",
+    "stationary(husky_base)",
+    "stowed(husky_franka)",
+    "arm_home(static_franka)",
+    "gripper_empty(husky_franka)",
+    "gripper_empty(static_franka)",
+    "at(repair_tool,tool_supply)",
+    "seeded_leak(pipe_rig)",
+    "leak_active(pipe_rig)"
+  ],
+  "goal_state": [
+    "leak_detected(pipe_rig)",
+    "leak_localized(pipe_rig)",
+    "leak_repaired(pipe_rig)",
+    "repair_verified(pipe_rig)",
+    "at(repair_tool,husky_tool_rack)",
+    "docked(b2_base,b2_home)",
+    "stationary(b2_base)",
+    "stowed(z1_thermal_arm)",
+    "docked(husky_base,husky_home)",
+    "stationary(husky_base)",
+    "stowed(husky_franka)",
+    "gripper_empty(husky_franka)",
+    "arm_home(static_franka)",
+    "gripper_empty(static_franka)"
+  ],
+  "entities": [
+    {"id": "pipe_rig", "type": "fixture"},
+    {"id": "repair_tool", "type": "tool"},
+    {"id": "tool_supply", "type": "location"},
+    {"id": "handoff_tray", "type": "location"},
+    {"id": "husky_tool_rack", "type": "location"},
+    {"id": "b2_home", "type": "dock"},
+    {"id": "pipe_view", "type": "dock"},
+    {"id": "verification_view", "type": "dock"},
+    {"id": "husky_home", "type": "dock"},
+    {"id": "leak_repair_dock", "type": "dock"},
+    {"id": "handoff_zone", "type": "zone"},
+    {"id": "b2_route", "type": "route"},
+    {"id": "husky_route", "type": "route"},
+    {"id": "pipe_view_zone", "type": "zone"},
+    {"id": "leak_repair_zone", "type": "zone"}
+  ],
+  "resources": [
+    {"id": "handoff_zone", "capacity": 1},
+    {"id": "b2_route", "capacity": 1},
+    {"id": "husky_route", "capacity": 1},
+    {"id": "pipe_view_zone", "capacity": 1},
+    {"id": "leak_repair_zone", "capacity": 1}
+  ],
+  "robots": [
+    {
+      "id": "b2_base",
+      "name": "Unitree B2 base",
+      "type": "mobile_base",
+      "capabilities": [
+        {
+          "name": "navigate_b2_pipe_inspection",
+          "parameters": [],
+          "parameter_types": [],
+          "resources": ["b2_route"],
+          "action_type": "navigation",
+          "duration_ticks": 5,
+          "timeout_ticks": 35,
+          "preconditions": ["system_ready()", "robot_ready(b2_base)", "docked(b2_base,b2_home)", "stationary(b2_base)", "stowed(z1_thermal_arm)"],
+          "effects": {"add": ["docked(b2_base,pipe_view)", "stationary(b2_base)"], "delete": ["docked(b2_base,b2_home)"]}
+        },
+        {
+          "name": "return_b2_home_after_repair",
+          "parameters": [],
+          "parameter_types": [],
+          "resources": ["b2_route"],
+          "action_type": "navigation",
+          "duration_ticks": 6,
+          "timeout_ticks": 45,
+          "preconditions": ["system_ready()", "robot_ready(b2_base)", "docked(b2_base,pipe_view)", "stationary(b2_base)", "stowed(z1_thermal_arm)", "repair_verified(pipe_rig)"],
+          "effects": {"add": ["docked(b2_base,b2_home)", "stationary(b2_base)"], "delete": ["docked(b2_base,pipe_view)"]}
+        }
+      ]
+    },
+    {
+      "id": "z1_thermal_arm",
+      "name": "Unitree Z1 thermal-camera arm mounted on B2",
+      "type": "sensor_manipulator",
+      "capabilities": [
+        {
+          "name": "deploy_camera_pipe_leak",
+          "parameters": [],
+          "parameter_types": [],
+          "resources": ["pipe_view_zone"],
+          "action_type": "manipulation",
+          "duration_ticks": 2,
+          "timeout_ticks": 18,
+          "preconditions": ["system_ready()", "robot_ready(z1_thermal_arm)", "docked(b2_base,pipe_view)", "stationary(b2_base)", "stowed(z1_thermal_arm)"],
+          "effects": {"add": ["camera_deployed(z1_thermal_arm,pipe_view)"], "delete": ["stowed(z1_thermal_arm)"]}
+        },
+        {
+          "name": "detect_pipe_leak",
+          "parameters": ["rig"],
+          "parameter_types": ["fixture"],
+          "resources": ["pipe_view_zone"],
+          "action_type": "verification",
+          "duration_ticks": 3,
+          "timeout_ticks": 18,
+          "preconditions": ["system_ready()", "robot_ready(z1_thermal_arm)", "camera_deployed(z1_thermal_arm,pipe_view)", "seeded_leak(rig)", "leak_active(rig)"],
+          "effects": {"add": ["leak_detected(rig)", "leak_localized(rig)"], "delete": []}
+        },
+        {
+          "name": "stow_z1_after_leak_detection",
+          "parameters": [],
+          "parameter_types": [],
+          "resources": ["pipe_view_zone"],
+          "action_type": "manipulation",
+          "duration_ticks": 2,
+          "timeout_ticks": 18,
+          "preconditions": ["system_ready()", "robot_ready(z1_thermal_arm)", "camera_deployed(z1_thermal_arm,pipe_view)", "leak_detected(pipe_rig)"],
+          "effects": {"add": ["stowed(z1_thermal_arm)"], "delete": ["camera_deployed(z1_thermal_arm,pipe_view)"]}
+        },
+        {
+          "name": "deploy_camera_repair_verification",
+          "parameters": [],
+          "parameter_types": [],
+          "resources": ["pipe_view_zone"],
+          "action_type": "manipulation",
+          "duration_ticks": 2,
+          "timeout_ticks": 18,
+          "preconditions": ["system_ready()", "robot_ready(z1_thermal_arm)", "docked(b2_base,pipe_view)", "stationary(b2_base)", "stowed(z1_thermal_arm)", "leak_repaired(pipe_rig)"],
+          "effects": {"add": ["camera_deployed(z1_thermal_arm,verification_view)"], "delete": ["stowed(z1_thermal_arm)"]}
+        },
+        {
+          "name": "verify_pipe_repair",
+          "parameters": ["rig"],
+          "parameter_types": ["fixture"],
+          "resources": ["pipe_view_zone"],
+          "action_type": "verification",
+          "duration_ticks": 3,
+          "timeout_ticks": 18,
+          "preconditions": ["system_ready()", "robot_ready(z1_thermal_arm)", "camera_deployed(z1_thermal_arm,verification_view)", "leak_repaired(rig)"],
+          "effects": {"add": ["repair_verified(rig)"], "delete": []}
+        },
+        {
+          "name": "stow_z1_after_repair_verification",
+          "parameters": [],
+          "parameter_types": [],
+          "resources": ["pipe_view_zone"],
+          "action_type": "manipulation",
+          "duration_ticks": 2,
+          "timeout_ticks": 18,
+          "preconditions": ["system_ready()", "robot_ready(z1_thermal_arm)", "camera_deployed(z1_thermal_arm,verification_view)", "repair_verified(pipe_rig)"],
+          "effects": {"add": ["stowed(z1_thermal_arm)"], "delete": ["camera_deployed(z1_thermal_arm,verification_view)"]}
+        }
+      ]
+    },
+    {
+      "id": "husky_base",
+      "name": "Clearpath Husky A200 base",
+      "type": "mobile_base",
+      "capabilities": [
+        {
+          "name": "navigate_husky_leak_repair_dock",
+          "parameters": [],
+          "parameter_types": [],
+          "resources": ["husky_route"],
+          "action_type": "navigation",
+          "duration_ticks": 5,
+          "timeout_ticks": 35,
+          "preconditions": ["system_ready()", "robot_ready(husky_base)", "docked(husky_base,husky_home)", "stationary(husky_base)", "stowed(husky_franka)", "tool_secured(husky_franka,repair_tool)", "leak_localized(pipe_rig)"],
+          "effects": {"add": ["docked(husky_base,leak_repair_dock)", "stationary(husky_base)"], "delete": ["docked(husky_base,husky_home)"]}
+        },
+        {
+          "name": "return_husky_home_after_repair",
+          "parameters": [],
+          "parameter_types": [],
+          "resources": ["husky_route"],
+          "action_type": "navigation",
+          "duration_ticks": 6,
+          "timeout_ticks": 45,
+          "preconditions": ["system_ready()", "robot_ready(husky_base)", "docked(husky_base,leak_repair_dock)", "stationary(husky_base)", "stowed(husky_franka)", "leak_repaired(pipe_rig)"],
+          "effects": {"add": ["docked(husky_base,husky_home)", "stationary(husky_base)"], "delete": ["docked(husky_base,leak_repair_dock)"]}
+        }
+      ]
+    },
+    {
+      "id": "husky_franka",
+      "name": "Franka Emika Panda mounted on Husky",
+      "type": "mobile_manipulator",
+      "capabilities": [
+        {
+          "name": "load_repair_tool",
+          "parameters": ["tool"],
+          "parameter_types": ["tool"],
+          "resources": ["handoff_zone"],
+          "action_type": "manipulation",
+          "duration_ticks": 3,
+          "timeout_ticks": 24,
+          "preconditions": ["system_ready()", "robot_ready(husky_franka)", "docked(husky_base,husky_home)", "stationary(husky_base)", "stowed(husky_franka)", "gripper_empty(husky_franka)", "tool_ready(tool)", "at(tool,handoff_tray)"],
+          "effects": {"add": ["holding(husky_franka,tool)", "tool_secured(husky_franka,tool)", "stowed(husky_franka)"], "delete": ["at(tool,handoff_tray)", "gripper_empty(husky_franka)"]}
+        },
+        {
+          "name": "repair_pipe_leak",
+          "parameters": ["tool", "rig"],
+          "parameter_types": ["tool", "fixture"],
+          "resources": ["leak_repair_zone"],
+          "action_type": "manipulation",
+          "duration_ticks": 5,
+          "timeout_ticks": 40,
+          "preconditions": ["system_ready()", "robot_ready(husky_franka)", "docked(husky_base,leak_repair_dock)", "stationary(husky_base)", "holding(husky_franka,tool)", "tool_secured(husky_franka,tool)", "leak_localized(rig)", "leak_active(rig)"],
+          "effects": {"add": ["leak_repaired(rig)", "at(tool,husky_tool_rack)", "gripper_empty(husky_franka)", "stowed(husky_franka)"], "delete": ["holding(husky_franka,tool)", "tool_secured(husky_franka,tool)", "leak_active(rig)"]}
+        }
+      ]
+    },
+    {
+      "id": "static_franka",
+      "name": "Static Franka Emika Panda",
+      "type": "fixed_manipulator",
+      "capabilities": [
+        {
+          "name": "prepare_repair_tool",
+          "parameters": ["tool"],
+          "parameter_types": ["tool"],
+          "resources": [],
+          "action_type": "manipulation",
+          "duration_ticks": 3,
+          "timeout_ticks": 24,
+          "preconditions": ["system_ready()", "robot_ready(static_franka)", "arm_home(static_franka)", "gripper_empty(static_franka)", "at(tool,tool_supply)"],
+          "effects": {"add": ["holding(static_franka,tool)"], "delete": ["at(tool,tool_supply)", "gripper_empty(static_franka)", "arm_home(static_franka)"]}
+        },
+        {
+          "name": "place_repair_tool_handoff",
+          "parameters": ["tool"],
+          "parameter_types": ["tool"],
+          "resources": ["handoff_zone"],
+          "action_type": "manipulation",
+          "duration_ticks": 3,
+          "timeout_ticks": 24,
+          "preconditions": ["system_ready()", "robot_ready(static_franka)", "holding(static_franka,tool)"],
+          "effects": {"add": ["at(tool,handoff_tray)", "tool_ready(tool)", "gripper_empty(static_franka)", "arm_home(static_franka)"], "delete": ["holding(static_franka,tool)"]}
+        }
+      ]
+    }
+  ]
+}

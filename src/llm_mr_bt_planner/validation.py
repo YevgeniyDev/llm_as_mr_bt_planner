@@ -464,6 +464,7 @@ def _validate_explicit_waits(plan: Plan, scenario: Scenario, report: ValidationR
     """
     initial = set(scenario.initial_state)
     produced_by: dict[str, set[str]] = {}
+    deleted_by: dict[str, set[str]] = {}
     for producer, tree in plan.behavior_trees.items():
         for leaf in iter_leaves(tree):
             if leaf.type != "Action":
@@ -474,20 +475,52 @@ def _validate_explicit_waits(plan: Plan, scenario: Scenario, report: ValidationR
             bindings = dict(zip(capability.parameters, leaf.parameters))
             for predicate in positive_effects(capability.effects, bindings):
                 produced_by.setdefault(predicate, set()).add(producer)
+            _, deletes = ground_effects(capability.effects, bindings)
+            for predicate in deletes:
+                deleted_by.setdefault(predicate, set()).add(producer)
 
-    wait_edges: dict[str, set[str]] = {robot: set() for robot in plan.behavior_trees}
+    # Robot-level dependency graphs reject valid phased collaboration such as
+    # mobile-base -> mounted-arm -> mobile-base.  Track the concrete flattened
+    # leaf occurrences instead: a deadlock exists only when producer/wait
+    # precedence and per-robot program order form a cycle.
+    precedence_edges: dict[str, set[str]] = {}
+    producer_events: dict[str, list[str]] = {}
+    leaves_by_robot: dict[str, list[BTNode]] = {
+        robot_id: list(iter_leaves(tree)) for robot_id, tree in plan.behavior_trees.items()
+    }
+    for producer, leaves in leaves_by_robot.items():
+        previous: str | None = None
+        for index, leaf in enumerate(leaves):
+            event = f"{producer}@{index}"
+            precedence_edges.setdefault(event, set())
+            if previous is not None:
+                precedence_edges[event].add(previous)
+            previous = event
+            if leaf.type != "Action":
+                continue
+            capability = scenario.capability(producer, leaf.name or "")
+            if capability is None or len(leaf.parameters) != len(capability.parameters):
+                continue
+            bindings = dict(zip(capability.parameters, leaf.parameters))
+            for predicate in positive_effects(capability.effects, bindings):
+                producer_events.setdefault(predicate, []).append(event)
+
     for robot_id, tree in plan.behavior_trees.items():
         known = set(initial)
         waited: set[str] = set()
         leaves = list(iter_leaves(tree))
-        for leaf in leaves:
+        for index, leaf in enumerate(leaves):
             predicate = leaf.label()
             if leaf.type == "Condition":
                 # A Condition is a branch/guard and is allowed to fail. It does
                 # not establish a predicate or replace cross-robot WaitFor.
                 continue
             if leaf.type == "WaitFor":
-                if predicate in known:
+                # A fact initially/local-sequentially known is not redundant
+                # when another tree can invalidate it before this wait. This
+                # is common for a mounted arm's stowed/deployed handshake.
+                externally_mutable = bool(deleted_by.get(predicate, set()) - {robot_id})
+                if predicate in known and not externally_mutable:
                     report.add(
                         "redundant_wait",
                         f"WaitFor '{predicate}' on '{robot_id}' is already guaranteed true at this point.",
@@ -499,7 +532,17 @@ def _validate_explicit_waits(plan: Plan, scenario: Scenario, report: ValidationR
                         "same_robot_wait" if local else "missing_wait_producer",
                         f"WaitFor '{predicate}' on '{robot_id}' has no producer action in another robot's tree.",
                     )
-                wait_edges[robot_id].update(producers)
+                wait_event = f"{robot_id}@{index}"
+                seen_producer_robots: set[str] = set()
+                for producer_event in producer_events.get(predicate, []):
+                    producer_robot = producer_event.rsplit("@", 1)[0]
+                    if producer_robot == robot_id or producer_robot in seen_producer_robots:
+                        continue
+                    # WaitFor has OR semantics when several actions/trees can
+                    # establish the same literal. Requiring every occurrence
+                    # creates false cycles with repeated phased handshakes.
+                    precedence_edges[wait_event].add(producer_event)
+                    seen_producer_robots.add(producer_robot)
                 waited.add(predicate)
                 known.add(predicate)
                 continue
@@ -529,9 +572,11 @@ def _validate_explicit_waits(plan: Plan, scenario: Scenario, report: ValidationR
             adds, deletes = ground_effects(capability.effects, bindings)
             apply_grounded(known, adds, deletes)
 
-    cycle = _wait_cycle(wait_edges)
+    cycle = _wait_cycle(precedence_edges)
     if cycle:
-        report.add("wait_cycle", f"Cross-robot WaitFor dependency cycle: {' -> '.join(cycle)}.")
+        robots = [event.rsplit("@", 1)[0] for event in cycle]
+        collapsed = [robot for index, robot in enumerate(robots) if index == 0 or robot != robots[index - 1]]
+        report.add("wait_cycle", f"Cross-robot WaitFor dependency cycle: {' -> '.join(collapsed)}.")
 
 
 def _validate_resources(plan: Plan, scenario: Scenario, report: ValidationReport) -> None:

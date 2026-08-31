@@ -1,0 +1,100 @@
+{
+  "schema_version": "2.0",
+  "mission_id": "five_agent_solar_pipe_inspection",
+  "behavior_trees": {
+    "b2_base": {
+      "id": "b2_base.root", "type": "Sequence", "source": "llm",
+      "children": [
+        {"id": "b2.wait.reference", "type": "WaitFor", "name": "thermal_reference_installed", "parameters": ["energy_rig"], "timeout_ticks": 120, "source": "llm"},
+        {"id": "b2.acquire.route.solar", "type": "AcquireResource", "name": "b2_route", "parameters": [], "timeout_ticks": 40, "source": "llm"},
+        {"id": "b2.action.solar", "type": "Action", "task_id": "b2_navigate_solar", "name": "navigate_b2_solar_view", "parameters": [], "source": "llm"},
+        {"id": "b2.release.route.solar", "type": "ReleaseResource", "name": "b2_route", "parameters": [], "source": "llm"},
+        {"id": "b2.wait.solar.scan", "type": "WaitFor", "name": "solar_scan_complete", "parameters": ["energy_rig"], "timeout_ticks": 120, "source": "llm"},
+        {"id": "b2.wait.z1.solar.stowed", "type": "WaitFor", "name": "stowed", "parameters": ["z1_thermal_arm"], "timeout_ticks": 60, "source": "llm"},
+        {"id": "b2.acquire.route.pipe", "type": "AcquireResource", "name": "b2_route", "parameters": [], "timeout_ticks": 40, "source": "llm"},
+        {"id": "b2.action.pipe", "type": "Action", "task_id": "b2_navigate_pipe", "name": "navigate_b2_pipe_view", "parameters": [], "source": "llm"},
+        {"id": "b2.release.route.pipe", "type": "ReleaseResource", "name": "b2_route", "parameters": [], "source": "llm"},
+        {"id": "b2.wait.verification", "type": "WaitFor", "name": "verification_passed", "parameters": ["energy_rig"], "timeout_ticks": 180, "source": "llm"},
+        {"id": "b2.wait.z1.final.stowed", "type": "WaitFor", "name": "stowed", "parameters": ["z1_thermal_arm"], "timeout_ticks": 60, "source": "llm"},
+        {"id": "b2.acquire.route.home", "type": "AcquireResource", "name": "b2_route", "parameters": [], "timeout_ticks": 40, "source": "llm"},
+        {"id": "b2.action.home", "type": "Action", "task_id": "b2_return_home", "name": "return_b2_home", "parameters": [], "source": "llm"},
+        {"id": "b2.release.route.home", "type": "ReleaseResource", "name": "b2_route", "parameters": [], "source": "llm"}
+      ]
+    },
+    "z1_thermal_arm": {
+      "id": "z1_thermal_arm.root", "type": "Sequence", "source": "llm",
+      "children": [
+        {"id": "z1.wait.solar.dock", "type": "WaitFor", "name": "docked", "parameters": ["b2_base", "solar_view"], "timeout_ticks": 120, "source": "llm"},
+        {"id": "z1.wait.reference", "type": "WaitFor", "name": "thermal_reference_installed", "parameters": ["energy_rig"], "timeout_ticks": 120, "source": "llm"},
+        {"id": "z1.acquire.solar", "type": "AcquireResource", "name": "solar_view_zone", "parameters": [], "timeout_ticks": 40, "source": "llm"},
+        {"id": "z1.action.deploy.solar", "type": "Action", "task_id": "z1_deploy_solar", "name": "deploy_camera_solar", "parameters": [], "source": "llm"},
+        {"id": "z1.action.scan.solar", "type": "Action", "task_id": "z1_scan_solar", "name": "scan_solar_panel", "parameters": ["energy_rig"], "source": "llm"},
+        {"id": "z1.action.stow.solar", "type": "Action", "task_id": "z1_stow_solar", "name": "stow_z1_after_solar", "parameters": [], "source": "llm"},
+        {"id": "z1.release.solar", "type": "ReleaseResource", "name": "solar_view_zone", "parameters": [], "source": "llm"},
+        {"id": "z1.wait.pipe.dock", "type": "WaitFor", "name": "docked", "parameters": ["b2_base", "pipe_view"], "timeout_ticks": 120, "source": "llm"},
+        {"id": "z1.acquire.pipe", "type": "AcquireResource", "name": "pipe_view_zone", "parameters": [], "timeout_ticks": 40, "source": "llm"},
+        {"id": "z1.action.deploy.pipe", "type": "Action", "task_id": "z1_deploy_pipe", "name": "deploy_camera_pipe", "parameters": [], "source": "llm"},
+        {"id": "z1.action.scan.pipe", "type": "Action", "task_id": "z1_scan_pipe", "name": "scan_pipe_rig", "parameters": ["energy_rig"], "source": "llm"},
+        {"id": "z1.action.stow.pipe", "type": "Action", "task_id": "z1_stow_pipe", "name": "stow_z1_after_pipe", "parameters": [], "source": "llm"},
+        {"id": "z1.release.pipe", "type": "ReleaseResource", "name": "pipe_view_zone", "parameters": [], "source": "llm"},
+        {"id": "z1.wait.isolated", "type": "WaitFor", "name": "asset_isolated", "parameters": ["energy_rig"], "timeout_ticks": 180, "source": "llm"},
+        {"id": "z1.wait.marker", "type": "WaitFor", "name": "marker_attached", "parameters": ["energy_rig"], "timeout_ticks": 180, "source": "llm"},
+        {"id": "z1.acquire.verify", "type": "AcquireResource", "name": "pipe_view_zone", "parameters": [], "timeout_ticks": 40, "source": "llm"},
+        {"id": "z1.action.deploy.verify", "type": "Action", "task_id": "z1_deploy_verify", "name": "deploy_camera_verification", "parameters": [], "source": "llm"},
+        {"id": "z1.action.verify", "type": "Action", "task_id": "z1_verify_isolation", "name": "verify_isolation_thermal", "parameters": ["energy_rig"], "source": "llm"},
+        {"id": "z1.action.stow.verify", "type": "Action", "task_id": "z1_stow_verify", "name": "stow_z1_after_verification", "parameters": [], "source": "llm"},
+        {"id": "z1.release.verify", "type": "ReleaseResource", "name": "pipe_view_zone", "parameters": [], "source": "llm"}
+      ]
+    },
+    "husky_base": {
+      "id": "husky_base.root", "type": "Sequence", "source": "llm",
+      "children": [
+        {"id": "husky.wait.kit", "type": "WaitFor", "name": "kit_secured", "parameters": ["husky_franka", "inspection_kit"], "timeout_ticks": 120, "source": "llm"},
+        {"id": "husky.acquire.route.reference", "type": "AcquireResource", "name": "husky_route", "parameters": [], "timeout_ticks": 40, "source": "llm"},
+        {"id": "husky.action.reference", "type": "Action", "task_id": "husky_navigate_reference", "name": "navigate_husky_reference_dock", "parameters": [], "source": "llm"},
+        {"id": "husky.release.route.reference", "type": "ReleaseResource", "name": "husky_route", "parameters": [], "source": "llm"},
+        {"id": "husky.wait.reference", "type": "WaitFor", "name": "thermal_reference_installed", "parameters": ["energy_rig"], "timeout_ticks": 120, "source": "llm"},
+        {"id": "husky.wait.anomaly", "type": "WaitFor", "name": "anomaly_localized", "parameters": ["energy_rig"], "timeout_ticks": 180, "source": "llm"},
+        {"id": "husky.acquire.route.anomaly", "type": "AcquireResource", "name": "husky_route", "parameters": [], "timeout_ticks": 40, "source": "llm"},
+        {"id": "husky.action.anomaly", "type": "Action", "task_id": "husky_navigate_anomaly", "name": "navigate_husky_anomaly_dock", "parameters": [], "source": "llm"},
+        {"id": "husky.release.route.anomaly", "type": "ReleaseResource", "name": "husky_route", "parameters": [], "source": "llm"},
+        {"id": "husky.wait.marker", "type": "WaitFor", "name": "marker_attached", "parameters": ["energy_rig"], "timeout_ticks": 180, "source": "llm"},
+        {"id": "husky.acquire.route.home", "type": "AcquireResource", "name": "husky_route", "parameters": [], "timeout_ticks": 40, "source": "llm"},
+        {"id": "husky.action.home", "type": "Action", "task_id": "husky_return_home", "name": "return_husky_home", "parameters": [], "source": "llm"},
+        {"id": "husky.release.route.home", "type": "ReleaseResource", "name": "husky_route", "parameters": [], "source": "llm"}
+      ]
+    },
+    "husky_franka": {
+      "id": "husky_franka.root", "type": "Sequence", "source": "llm",
+      "children": [
+        {"id": "husky_franka.wait.kit.ready", "type": "WaitFor", "name": "kit_ready", "parameters": ["inspection_kit"], "timeout_ticks": 120, "source": "llm"},
+        {"id": "husky_franka.wait.kit.handoff", "type": "WaitFor", "name": "at", "parameters": ["inspection_kit", "handoff_tray"], "timeout_ticks": 120, "source": "llm"},
+        {"id": "husky_franka.acquire.handoff", "type": "AcquireResource", "name": "handoff_zone", "parameters": [], "timeout_ticks": 40, "source": "llm"},
+        {"id": "husky_franka.action.load", "type": "Action", "task_id": "husky_franka_load_kit", "name": "load_inspection_kit", "parameters": ["inspection_kit"], "source": "llm"},
+        {"id": "husky_franka.release.handoff", "type": "ReleaseResource", "name": "handoff_zone", "parameters": [], "source": "llm"},
+        {"id": "husky_franka.wait.reference.dock", "type": "WaitFor", "name": "docked", "parameters": ["husky_base", "reference_dock"], "timeout_ticks": 120, "source": "llm"},
+        {"id": "husky_franka.acquire.reference", "type": "AcquireResource", "name": "anomaly_service_zone", "parameters": [], "timeout_ticks": 40, "source": "llm"},
+        {"id": "husky_franka.action.install", "type": "Action", "task_id": "husky_franka_install_reference", "name": "install_thermal_reference", "parameters": ["inspection_kit", "energy_rig"], "source": "llm"},
+        {"id": "husky_franka.release.reference", "type": "ReleaseResource", "name": "anomaly_service_zone", "parameters": [], "source": "llm"},
+        {"id": "husky_franka.wait.anomaly.dock", "type": "WaitFor", "name": "docked", "parameters": ["husky_base", "anomaly_service_dock"], "timeout_ticks": 180, "source": "llm"},
+        {"id": "husky_franka.wait.localized", "type": "WaitFor", "name": "anomaly_localized", "parameters": ["energy_rig"], "timeout_ticks": 180, "source": "llm"},
+        {"id": "husky_franka.acquire.confirm", "type": "AcquireResource", "name": "anomaly_service_zone", "parameters": [], "timeout_ticks": 40, "source": "llm"},
+        {"id": "husky_franka.action.confirm", "type": "Action", "task_id": "husky_franka_confirm", "name": "confirm_reported_anomaly", "parameters": ["energy_rig"], "source": "llm"},
+        {"id": "husky_franka.action.marker", "type": "Action", "task_id": "husky_franka_marker", "name": "attach_inspection_marker", "parameters": ["energy_rig"], "source": "llm"},
+        {"id": "husky_franka.release.confirm", "type": "ReleaseResource", "name": "anomaly_service_zone", "parameters": [], "source": "llm"},
+        {"id": "husky_franka.acquire.control", "type": "AcquireResource", "name": "static_control_zone", "parameters": [], "timeout_ticks": 40, "source": "llm"},
+        {"id": "husky_franka.action.isolate", "type": "Action", "task_id": "husky_franka_isolate", "name": "isolate_energy_rig", "parameters": ["energy_rig", "isolation_control"], "source": "llm"},
+        {"id": "husky_franka.release.control", "type": "ReleaseResource", "name": "static_control_zone", "parameters": [], "source": "llm"}
+      ]
+    },
+    "static_franka": {
+      "id": "static_franka.root", "type": "Sequence", "source": "llm",
+      "children": [
+        {"id": "static_franka.action.prepare", "type": "Action", "task_id": "static_prepare_kit", "name": "prepare_inspection_kit", "parameters": ["inspection_kit"], "source": "llm"},
+        {"id": "static_franka.acquire.handoff", "type": "AcquireResource", "name": "handoff_zone", "parameters": [], "timeout_ticks": 40, "source": "llm"},
+        {"id": "static_franka.action.handoff", "type": "Action", "task_id": "static_place_kit", "name": "place_inspection_kit_handoff", "parameters": ["inspection_kit"], "source": "llm"},
+        {"id": "static_franka.release.handoff", "type": "ReleaseResource", "name": "handoff_zone", "parameters": [], "source": "llm"}
+      ]
+    }
+  }
+}

@@ -71,6 +71,23 @@ The simulator downloads robot model assets on first use. These files are cached 
 
 The loader verifies the revision before constructing the simulation and writes `LMRBTP_ASSET_PROVENANCE.json` into a cache it creates.
 
+## Five-agent inspection robot sources
+
+- Unitree MuJoCo (official B2 MJCF and meshes): https://github.com/unitreerobotics/unitree_mujoco
+- Pinned Unitree commit: `4134cb5dc7ff1ba7f484deda48b5274b58694519`
+- Unitree repository license: BSD-3-Clause
+- Clearpath Husky (official description and meshes): https://github.com/husky/husky/tree/noetic-devel
+- Pinned Husky commit: `41e15d283a8d955938204e79554a875264417bb9`
+- Husky repository license: BSD-3-Clause
+
+The inspection asset loader sparse-checks out both exact revisions into the external cache, rejects
+a dirty checkout, and records their provenance. The scene attaches the official Unitree B2 MJCF
+to the task-level base controller. Husky is a local MuJoCo adaptation using the official A200 URDF
+dimensions, wheel positions/radius, mass, and inertial values; it is not an official Clearpath
+MuJoCo model. Panda and Z1 models come from the pinned MuJoCo Menagerie checkout above. The mobile
+controllers are deterministic task-level simulation controllers and are not presented as Unitree
+or Clearpath real-robot control software.
+
 ## Controller references
 
 - `kevinzakka/mjctrl`, commit `f1c82c257248e2e52b0e6c1beaf23c6a2026e4f2`, Apache-2.0: https://github.com/kevinzakka/mjctrl

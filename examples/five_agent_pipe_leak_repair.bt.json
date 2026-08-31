@@ -1,0 +1,74 @@
+{
+  "schema_version": "2.0",
+  "mission_id": "five_agent_pipe_leak_repair",
+  "behavior_trees": {
+    "b2_base": {
+      "id": "pipe.b2.root", "type": "Sequence", "source": "llm",
+      "children": [
+        {"id": "pipe.b2.acquire.out", "type": "AcquireResource", "name": "b2_route", "parameters": [], "timeout_ticks": 40, "source": "llm"},
+        {"id": "pipe.b2.go", "type": "Action", "task_id": "pipe_b2_go", "name": "navigate_b2_pipe_inspection", "parameters": [], "source": "llm"},
+        {"id": "pipe.b2.release.out", "type": "ReleaseResource", "name": "b2_route", "parameters": [], "source": "llm"},
+        {"id": "pipe.b2.wait.verified", "type": "WaitFor", "name": "repair_verified", "parameters": ["pipe_rig"], "timeout_ticks": 180, "source": "llm"},
+        {"id": "pipe.b2.wait.stowed", "type": "WaitFor", "name": "stowed", "parameters": ["z1_thermal_arm"], "timeout_ticks": 80, "source": "llm"},
+        {"id": "pipe.b2.acquire.home", "type": "AcquireResource", "name": "b2_route", "parameters": [], "timeout_ticks": 40, "source": "llm"},
+        {"id": "pipe.b2.home", "type": "Action", "task_id": "pipe_b2_home", "name": "return_b2_home_after_repair", "parameters": [], "source": "llm"},
+        {"id": "pipe.b2.release.home", "type": "ReleaseResource", "name": "b2_route", "parameters": [], "source": "llm"}
+      ]
+    },
+    "z1_thermal_arm": {
+      "id": "pipe.z1.root", "type": "Sequence", "source": "llm",
+      "children": [
+        {"id": "pipe.z1.wait.view", "type": "WaitFor", "name": "docked", "parameters": ["b2_base", "pipe_view"], "timeout_ticks": 120, "source": "llm"},
+        {"id": "pipe.z1.acquire.detect", "type": "AcquireResource", "name": "pipe_view_zone", "parameters": [], "timeout_ticks": 40, "source": "llm"},
+        {"id": "pipe.z1.deploy.detect", "type": "Action", "task_id": "pipe_z1_deploy_detect", "name": "deploy_camera_pipe_leak", "parameters": [], "source": "llm"},
+        {"id": "pipe.z1.detect", "type": "Action", "task_id": "pipe_z1_detect", "name": "detect_pipe_leak", "parameters": ["pipe_rig"], "source": "llm"},
+        {"id": "pipe.z1.stow.detect", "type": "Action", "task_id": "pipe_z1_stow_detect", "name": "stow_z1_after_leak_detection", "parameters": [], "source": "llm"},
+        {"id": "pipe.z1.release.detect", "type": "ReleaseResource", "name": "pipe_view_zone", "parameters": [], "source": "llm"},
+        {"id": "pipe.z1.wait.repaired", "type": "WaitFor", "name": "leak_repaired", "parameters": ["pipe_rig"], "timeout_ticks": 180, "source": "llm"},
+        {"id": "pipe.z1.acquire.verify", "type": "AcquireResource", "name": "pipe_view_zone", "parameters": [], "timeout_ticks": 40, "source": "llm"},
+        {"id": "pipe.z1.deploy.verify", "type": "Action", "task_id": "pipe_z1_deploy_verify", "name": "deploy_camera_repair_verification", "parameters": [], "source": "llm"},
+        {"id": "pipe.z1.verify", "type": "Action", "task_id": "pipe_z1_verify", "name": "verify_pipe_repair", "parameters": ["pipe_rig"], "source": "llm"},
+        {"id": "pipe.z1.stow.verify", "type": "Action", "task_id": "pipe_z1_stow_verify", "name": "stow_z1_after_repair_verification", "parameters": [], "source": "llm"},
+        {"id": "pipe.z1.release.verify", "type": "ReleaseResource", "name": "pipe_view_zone", "parameters": [], "source": "llm"}
+      ]
+    },
+    "husky_base": {
+      "id": "pipe.husky.root", "type": "Sequence", "source": "llm",
+      "children": [
+        {"id": "pipe.husky.wait.tool", "type": "WaitFor", "name": "tool_secured", "parameters": ["husky_franka", "repair_tool"], "timeout_ticks": 120, "source": "llm"},
+        {"id": "pipe.husky.wait.leak", "type": "WaitFor", "name": "leak_localized", "parameters": ["pipe_rig"], "timeout_ticks": 120, "source": "llm"},
+        {"id": "pipe.husky.acquire.out", "type": "AcquireResource", "name": "husky_route", "parameters": [], "timeout_ticks": 40, "source": "llm"},
+        {"id": "pipe.husky.go", "type": "Action", "task_id": "pipe_husky_go", "name": "navigate_husky_leak_repair_dock", "parameters": [], "source": "llm"},
+        {"id": "pipe.husky.release.out", "type": "ReleaseResource", "name": "husky_route", "parameters": [], "source": "llm"},
+        {"id": "pipe.husky.wait.repaired", "type": "WaitFor", "name": "leak_repaired", "parameters": ["pipe_rig"], "timeout_ticks": 160, "source": "llm"},
+        {"id": "pipe.husky.acquire.home", "type": "AcquireResource", "name": "husky_route", "parameters": [], "timeout_ticks": 40, "source": "llm"},
+        {"id": "pipe.husky.home", "type": "Action", "task_id": "pipe_husky_home", "name": "return_husky_home_after_repair", "parameters": [], "source": "llm"},
+        {"id": "pipe.husky.release.home", "type": "ReleaseResource", "name": "husky_route", "parameters": [], "source": "llm"}
+      ]
+    },
+    "husky_franka": {
+      "id": "pipe.husky_franka.root", "type": "Sequence", "source": "llm",
+      "children": [
+        {"id": "pipe.hf.wait.ready", "type": "WaitFor", "name": "tool_ready", "parameters": ["repair_tool"], "timeout_ticks": 120, "source": "llm"},
+        {"id": "pipe.hf.wait.handoff", "type": "WaitFor", "name": "at", "parameters": ["repair_tool", "handoff_tray"], "timeout_ticks": 120, "source": "llm"},
+        {"id": "pipe.hf.acquire.load", "type": "AcquireResource", "name": "handoff_zone", "parameters": [], "timeout_ticks": 40, "source": "llm"},
+        {"id": "pipe.hf.load", "type": "Action", "task_id": "pipe_hf_load", "name": "load_repair_tool", "parameters": ["repair_tool"], "source": "llm"},
+        {"id": "pipe.hf.release.load", "type": "ReleaseResource", "name": "handoff_zone", "parameters": [], "source": "llm"},
+        {"id": "pipe.hf.wait.localized", "type": "WaitFor", "name": "leak_localized", "parameters": ["pipe_rig"], "timeout_ticks": 160, "source": "llm"},
+        {"id": "pipe.hf.wait.dock", "type": "WaitFor", "name": "docked", "parameters": ["husky_base", "leak_repair_dock"], "timeout_ticks": 160, "source": "llm"},
+        {"id": "pipe.hf.acquire.repair", "type": "AcquireResource", "name": "leak_repair_zone", "parameters": [], "timeout_ticks": 40, "source": "llm"},
+        {"id": "pipe.hf.repair", "type": "Action", "task_id": "pipe_hf_repair", "name": "repair_pipe_leak", "parameters": ["repair_tool", "pipe_rig"], "source": "llm"},
+        {"id": "pipe.hf.release.repair", "type": "ReleaseResource", "name": "leak_repair_zone", "parameters": [], "source": "llm"}
+      ]
+    },
+    "static_franka": {
+      "id": "pipe.static.root", "type": "Sequence", "source": "llm",
+      "children": [
+        {"id": "pipe.static.prepare", "type": "Action", "task_id": "pipe_static_prepare", "name": "prepare_repair_tool", "parameters": ["repair_tool"], "source": "llm"},
+        {"id": "pipe.static.acquire", "type": "AcquireResource", "name": "handoff_zone", "parameters": [], "timeout_ticks": 40, "source": "llm"},
+        {"id": "pipe.static.place", "type": "Action", "task_id": "pipe_static_place", "name": "place_repair_tool_handoff", "parameters": ["repair_tool"], "source": "llm"},
+        {"id": "pipe.static.release", "type": "ReleaseResource", "name": "handoff_zone", "parameters": [], "source": "llm"}
+      ]
+    }
+  }
+}

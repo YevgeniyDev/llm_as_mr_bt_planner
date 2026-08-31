@@ -139,3 +139,74 @@ def test_cross_robot_dependency_requires_explicit_wait():
 
     remove_waits(document["behavior_trees"]["B"])
     assert "missing_wait_for" in _types(document)
+
+
+def test_phased_bidirectional_collaboration_is_not_a_false_wait_cycle():
+    scenario = parse_scenario(
+        {
+            "task_id": "phased",
+            "instruction": "A starts, B responds, then A finishes.",
+            "initial_state": [],
+            "goal_state": ["done()"],
+            "objects": [],
+            "locations": [],
+            "robots": [
+                {"id": "A", "capabilities": [
+                    {"name": "start", "parameters": [], "preconditions": [], "effects": {"add": ["started()"], "delete": []}},
+                    {"name": "finish", "parameters": [], "preconditions": ["responded()"], "effects": {"add": ["done()"], "delete": []}},
+                ]},
+                {"id": "B", "capabilities": [
+                    {"name": "respond", "parameters": [], "preconditions": ["started()"], "effects": {"add": ["responded()"], "delete": []}},
+                ]},
+            ],
+        }
+    )
+    plan = parse_plan(
+        {
+            "schema_version": "2.0", "mission_id": "phased", "behavior_trees": {
+                "A": {"id": "A.root", "type": "Sequence", "source": "llm", "children": [
+                    {"id": "A.start", "type": "Action", "task_id": "a-start", "name": "start", "parameters": [], "source": "llm"},
+                    {"id": "A.wait", "type": "WaitFor", "name": "responded", "parameters": [], "timeout_ticks": 20, "source": "llm"},
+                    {"id": "A.finish", "type": "Action", "task_id": "a-finish", "name": "finish", "parameters": [], "source": "llm"},
+                ]},
+                "B": {"id": "B.root", "type": "Sequence", "source": "llm", "children": [
+                    {"id": "B.wait", "type": "WaitFor", "name": "started", "parameters": [], "timeout_ticks": 20, "source": "llm"},
+                    {"id": "B.respond", "type": "Action", "task_id": "b-respond", "name": "respond", "parameters": [], "source": "llm"},
+                ]},
+            },
+        }
+    )
+    report = validate_plan(plan, scenario)
+    assert report.valid, report.to_dicts()
+
+
+def test_true_cross_robot_causal_wait_cycle_is_rejected():
+    scenario = parse_scenario(
+        {
+            "task_id": "cycle", "instruction": "Detect a causal cycle.",
+            "initial_state": [], "goal_state": ["p()", "q()"], "objects": [], "locations": [],
+            "robots": [
+                {"id": "A", "capabilities": [
+                    {"name": "make_p", "parameters": [], "preconditions": ["q()"], "effects": {"add": ["p()"], "delete": []}}
+                ]},
+                {"id": "B", "capabilities": [
+                    {"name": "make_q", "parameters": [], "preconditions": ["p()"], "effects": {"add": ["q()"], "delete": []}}
+                ]},
+            ],
+        }
+    )
+    plan = parse_plan(
+        {
+            "schema_version": "2.0", "mission_id": "cycle", "behavior_trees": {
+                "A": {"id": "A.root", "type": "Sequence", "source": "llm", "children": [
+                    {"id": "A.wait", "type": "WaitFor", "name": "q", "parameters": [], "timeout_ticks": 20, "source": "llm"},
+                    {"id": "A.make", "type": "Action", "task_id": "a", "name": "make_p", "parameters": [], "source": "llm"},
+                ]},
+                "B": {"id": "B.root", "type": "Sequence", "source": "llm", "children": [
+                    {"id": "B.wait", "type": "WaitFor", "name": "p", "parameters": [], "timeout_ticks": 20, "source": "llm"},
+                    {"id": "B.make", "type": "Action", "task_id": "b", "name": "make_q", "parameters": [], "source": "llm"},
+                ]},
+            },
+        }
+    )
+    assert "wait_cycle" in {error.type for error in validate_plan(plan, scenario).errors}

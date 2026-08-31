@@ -1,0 +1,27 @@
+{
+  "schema_version": "1.0",
+  "fault_id": "drop_inspection_kit_after_handoff",
+  "fault_type": "drop_tool",
+  "description": "After the static Franka has placed and released the only inspection kit, but before Husky's Franka can grasp it, the kit is knocked from the handoff tray and lands at an initially unknown point in the shared search corridor.",
+  "trigger": {
+    "after_robot": "static_franka",
+    "after_action": "place_inspection_kit_handoff",
+    "before_robot": "husky_franka",
+    "before_action": "load_inspection_kit",
+    "object": "inspection_kit"
+  },
+  "injection": {
+    "seed": 23,
+    "horizontal_velocity_m_s": [3.0, 2.0],
+    "vertical_velocity_m_s": 0.6,
+    "settle_seconds": 1.5
+  },
+  "expected_observation": {
+    "classification": "tool_dropped_and_location_unknown",
+    "object": "inspection_kit",
+    "object_usable": true,
+    "requires_localization": true,
+    "localization_team": ["b2_base", "z1_thermal_arm"],
+    "recovery_team": ["husky_base", "husky_franka"]
+  }
+}

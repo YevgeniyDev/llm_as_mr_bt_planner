@@ -81,6 +81,11 @@ SUPPORTED_ACTIONS = {
 
 def run_cli(args: Namespace) -> int:
     _validate_recording_cli_args(args)
+    scenario = load_scenario(args.scenario, strict=True)
+    if scenario.task_id in {"five_agent_solar_pipe_inspection", "five_agent_pipe_leak_repair"}:
+        from .inspection_runner import run_inspection_cli
+
+        return run_inspection_cli(args, scenario=scenario)
     assets = ensure_assets(args.assets_dir, progress=print)
     if args.setup_only:
         print(f"Pinned asset commit: {MENAGERIE_COMMIT}")
@@ -88,7 +93,6 @@ def run_cli(args: Namespace) -> int:
     if args.max_seconds <= 0:
         raise ValueError("--max-seconds must be greater than zero.")
 
-    scenario = load_scenario(args.scenario, strict=True)
     bt_path = Path(args.bt) if args.bt else Path(args.scenario).with_suffix(".bt.json")
     if not bt_path.is_file():
         raise ValueError(

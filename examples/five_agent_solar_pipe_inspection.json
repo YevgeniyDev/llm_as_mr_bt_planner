@@ -1,0 +1,356 @@
+{
+  "schema_version": "1.0",
+  "task_id": "five_agent_solar_pipe_inspection",
+  "instruction": "Inspect the laboratory solar-panel and pipe test rig with five coordinated robot controllers. The static Franka must prepare the inspection kit and place it in the shared handoff. The Franka mounted on Husky must load the kit, Husky must transport it, and the mounted Franka must install its thermal reference before inspection. B2 may move only while the Z1 thermal-camera arm is stowed. Z1 must scan both the solar panel and pipe rig from measured B2 viewpoints and localize the single seeded thermal anomaly without assuming its hidden physical location. Husky may move only while its Franka is stowed. After localization, Husky must position its Franka at the service dock, where the Franka must physically confirm and mark the reported anomaly, then operate the nearby mock isolation control. B2/Z1 must perform a verification scan. Every shared zone must be acquired and released explicitly, no robot may wait while holding a shared resource, all waits and acquisitions must be bounded, and both mobile platforms and all arms must finish home or stowed.",
+  "initial_state": [
+    "system_ready()",
+    "robot_ready(b2_base)",
+    "robot_ready(z1_thermal_arm)",
+    "robot_ready(husky_base)",
+    "robot_ready(husky_franka)",
+    "robot_ready(static_franka)",
+    "mounted_on(z1_thermal_arm,b2_base)",
+    "mounted_on(husky_franka,husky_base)",
+    "docked(b2_base,b2_home)",
+    "stationary(b2_base)",
+    "stowed(z1_thermal_arm)",
+    "docked(husky_base,husky_home)",
+    "stationary(husky_base)",
+    "stowed(husky_franka)",
+    "arm_home(static_franka)",
+    "gripper_empty(husky_franka)",
+    "gripper_empty(static_franka)",
+    "at(inspection_kit,kit_supply)",
+    "seeded_anomaly(energy_rig)",
+    "asset_active(energy_rig)"
+  ],
+  "goal_state": [
+    "thermal_reference_installed(energy_rig)",
+    "solar_scan_complete(energy_rig)",
+    "pipe_scan_complete(energy_rig)",
+    "anomaly_localized(energy_rig)",
+    "anomaly_confirmed(energy_rig)",
+    "marker_attached(energy_rig)",
+    "asset_isolated(energy_rig)",
+    "verification_passed(energy_rig)",
+    "docked(b2_base,b2_home)",
+    "stationary(b2_base)",
+    "stowed(z1_thermal_arm)",
+    "docked(husky_base,husky_home)",
+    "stationary(husky_base)",
+    "stowed(husky_franka)",
+    "gripper_empty(husky_franka)",
+    "arm_home(static_franka)",
+    "gripper_empty(static_franka)"
+  ],
+  "entities": [
+    {"id": "energy_rig", "type": "fixture"},
+    {"id": "inspection_kit", "type": "tool"},
+    {"id": "kit_supply", "type": "location"},
+    {"id": "handoff_tray", "type": "location"},
+    {"id": "reference_mount", "type": "location"},
+    {"id": "isolation_control", "type": "fixture"},
+    {"id": "b2_home", "type": "dock"},
+    {"id": "solar_view", "type": "dock"},
+    {"id": "pipe_view", "type": "dock"},
+    {"id": "verification_view", "type": "dock"},
+    {"id": "husky_home", "type": "dock"},
+    {"id": "reference_dock", "type": "dock"},
+    {"id": "anomaly_service_dock", "type": "dock"},
+    {"id": "handoff_zone", "type": "zone"},
+    {"id": "b2_route", "type": "route"},
+    {"id": "husky_route", "type": "route"},
+    {"id": "solar_view_zone", "type": "zone"},
+    {"id": "pipe_view_zone", "type": "zone"},
+    {"id": "anomaly_service_zone", "type": "zone"},
+    {"id": "static_control_zone", "type": "zone"}
+  ],
+  "resources": [
+    {"id": "handoff_zone", "capacity": 1},
+    {"id": "b2_route", "capacity": 1},
+    {"id": "husky_route", "capacity": 1},
+    {"id": "solar_view_zone", "capacity": 1},
+    {"id": "pipe_view_zone", "capacity": 1},
+    {"id": "anomaly_service_zone", "capacity": 1},
+    {"id": "static_control_zone", "capacity": 1}
+  ],
+  "robots": [
+    {
+      "id": "b2_base",
+      "name": "Unitree B2 base",
+      "type": "mobile_base",
+      "capabilities": [
+        {
+          "name": "navigate_b2_solar_view",
+          "parameters": [],
+          "parameter_types": [],
+          "resources": ["b2_route"],
+          "action_type": "navigation",
+          "duration_ticks": 5,
+          "timeout_ticks": 35,
+          "preconditions": ["system_ready()", "robot_ready(b2_base)", "docked(b2_base,b2_home)", "stationary(b2_base)", "stowed(z1_thermal_arm)"],
+          "effects": {"add": ["docked(b2_base,solar_view)", "stationary(b2_base)"], "delete": ["docked(b2_base,b2_home)"]}
+        },
+        {
+          "name": "navigate_b2_pipe_view",
+          "parameters": [],
+          "parameter_types": [],
+          "resources": ["b2_route"],
+          "action_type": "navigation",
+          "duration_ticks": 5,
+          "timeout_ticks": 35,
+          "preconditions": ["system_ready()", "robot_ready(b2_base)", "docked(b2_base,solar_view)", "stationary(b2_base)", "stowed(z1_thermal_arm)", "solar_scan_complete(energy_rig)"],
+          "effects": {"add": ["docked(b2_base,pipe_view)", "stationary(b2_base)"], "delete": ["docked(b2_base,solar_view)"]}
+        },
+        {
+          "name": "return_b2_home",
+          "parameters": [],
+          "parameter_types": [],
+          "resources": ["b2_route"],
+          "action_type": "navigation",
+          "duration_ticks": 6,
+          "timeout_ticks": 45,
+          "preconditions": ["system_ready()", "robot_ready(b2_base)", "docked(b2_base,pipe_view)", "stationary(b2_base)", "stowed(z1_thermal_arm)", "verification_passed(energy_rig)"],
+          "effects": {"add": ["docked(b2_base,b2_home)", "stationary(b2_base)"], "delete": ["docked(b2_base,pipe_view)"]}
+        }
+      ]
+    },
+    {
+      "id": "z1_thermal_arm",
+      "name": "Unitree Z1 thermal-camera arm mounted on B2",
+      "type": "sensor_manipulator",
+      "capabilities": [
+        {
+          "name": "deploy_camera_solar",
+          "parameters": [],
+          "parameter_types": [],
+          "resources": ["solar_view_zone"],
+          "action_type": "manipulation",
+          "duration_ticks": 2,
+          "timeout_ticks": 18,
+          "preconditions": ["system_ready()", "robot_ready(z1_thermal_arm)", "docked(b2_base,solar_view)", "stationary(b2_base)", "stowed(z1_thermal_arm)", "thermal_reference_installed(energy_rig)"],
+          "effects": {"add": ["camera_deployed(z1_thermal_arm,solar_view)"], "delete": ["stowed(z1_thermal_arm)"]}
+        },
+        {
+          "name": "scan_solar_panel",
+          "parameters": ["rig"],
+          "parameter_types": ["fixture"],
+          "resources": ["solar_view_zone"],
+          "action_type": "verification",
+          "duration_ticks": 2,
+          "timeout_ticks": 12,
+          "preconditions": ["system_ready()", "robot_ready(z1_thermal_arm)", "camera_deployed(z1_thermal_arm,solar_view)", "thermal_reference_installed(rig)"],
+          "effects": {"add": ["solar_scan_complete(rig)"], "delete": []}
+        },
+        {
+          "name": "stow_z1_after_solar",
+          "parameters": [],
+          "parameter_types": [],
+          "resources": ["solar_view_zone"],
+          "action_type": "manipulation",
+          "duration_ticks": 2,
+          "timeout_ticks": 18,
+          "preconditions": ["system_ready()", "robot_ready(z1_thermal_arm)", "camera_deployed(z1_thermal_arm,solar_view)", "solar_scan_complete(energy_rig)"],
+          "effects": {"add": ["stowed(z1_thermal_arm)"], "delete": ["camera_deployed(z1_thermal_arm,solar_view)"]}
+        },
+        {
+          "name": "deploy_camera_pipe",
+          "parameters": [],
+          "parameter_types": [],
+          "resources": ["pipe_view_zone"],
+          "action_type": "manipulation",
+          "duration_ticks": 2,
+          "timeout_ticks": 18,
+          "preconditions": ["system_ready()", "robot_ready(z1_thermal_arm)", "docked(b2_base,pipe_view)", "stationary(b2_base)", "stowed(z1_thermal_arm)"],
+          "effects": {"add": ["camera_deployed(z1_thermal_arm,pipe_view)"], "delete": ["stowed(z1_thermal_arm)"]}
+        },
+        {
+          "name": "scan_pipe_rig",
+          "parameters": ["rig"],
+          "parameter_types": ["fixture"],
+          "resources": ["pipe_view_zone"],
+          "action_type": "verification",
+          "duration_ticks": 2,
+          "timeout_ticks": 12,
+          "preconditions": ["system_ready()", "robot_ready(z1_thermal_arm)", "camera_deployed(z1_thermal_arm,pipe_view)", "solar_scan_complete(rig)", "seeded_anomaly(rig)"],
+          "effects": {"add": ["pipe_scan_complete(rig)", "anomaly_localized(rig)"], "delete": []}
+        },
+        {
+          "name": "stow_z1_after_pipe",
+          "parameters": [],
+          "parameter_types": [],
+          "resources": ["pipe_view_zone"],
+          "action_type": "manipulation",
+          "duration_ticks": 2,
+          "timeout_ticks": 18,
+          "preconditions": ["system_ready()", "robot_ready(z1_thermal_arm)", "camera_deployed(z1_thermal_arm,pipe_view)", "pipe_scan_complete(energy_rig)"],
+          "effects": {"add": ["stowed(z1_thermal_arm)"], "delete": ["camera_deployed(z1_thermal_arm,pipe_view)"]}
+        },
+        {
+          "name": "deploy_camera_verification",
+          "parameters": [],
+          "parameter_types": [],
+          "resources": ["pipe_view_zone"],
+          "action_type": "manipulation",
+          "duration_ticks": 2,
+          "timeout_ticks": 18,
+          "preconditions": ["system_ready()", "robot_ready(z1_thermal_arm)", "docked(b2_base,pipe_view)", "stationary(b2_base)", "stowed(z1_thermal_arm)", "asset_isolated(energy_rig)"],
+          "effects": {"add": ["camera_deployed(z1_thermal_arm,verification_view)"], "delete": ["stowed(z1_thermal_arm)"]}
+        },
+        {
+          "name": "verify_isolation_thermal",
+          "parameters": ["rig"],
+          "parameter_types": ["fixture"],
+          "resources": ["pipe_view_zone"],
+          "action_type": "verification",
+          "duration_ticks": 2,
+          "timeout_ticks": 12,
+          "preconditions": ["system_ready()", "robot_ready(z1_thermal_arm)", "camera_deployed(z1_thermal_arm,verification_view)", "asset_isolated(rig)", "marker_attached(rig)"],
+          "effects": {"add": ["verification_passed(rig)"], "delete": []}
+        },
+        {
+          "name": "stow_z1_after_verification",
+          "parameters": [],
+          "parameter_types": [],
+          "resources": ["pipe_view_zone"],
+          "action_type": "manipulation",
+          "duration_ticks": 2,
+          "timeout_ticks": 18,
+          "preconditions": ["system_ready()", "robot_ready(z1_thermal_arm)", "camera_deployed(z1_thermal_arm,verification_view)", "verification_passed(energy_rig)"],
+          "effects": {"add": ["stowed(z1_thermal_arm)"], "delete": ["camera_deployed(z1_thermal_arm,verification_view)"]}
+        }
+      ]
+    },
+    {
+      "id": "husky_base",
+      "name": "Clearpath Husky A200 base",
+      "type": "mobile_base",
+      "capabilities": [
+        {
+          "name": "navigate_husky_reference_dock",
+          "parameters": [],
+          "parameter_types": [],
+          "resources": ["husky_route"],
+          "action_type": "navigation",
+          "duration_ticks": 5,
+          "timeout_ticks": 35,
+          "preconditions": ["system_ready()", "robot_ready(husky_base)", "docked(husky_base,husky_home)", "stationary(husky_base)", "stowed(husky_franka)", "kit_secured(husky_franka,inspection_kit)"],
+          "effects": {"add": ["docked(husky_base,reference_dock)", "stationary(husky_base)"], "delete": ["docked(husky_base,husky_home)"]}
+        },
+        {
+          "name": "navigate_husky_anomaly_dock",
+          "parameters": [],
+          "parameter_types": [],
+          "resources": ["husky_route"],
+          "action_type": "navigation",
+          "duration_ticks": 5,
+          "timeout_ticks": 35,
+          "preconditions": ["system_ready()", "robot_ready(husky_base)", "docked(husky_base,reference_dock)", "stationary(husky_base)", "stowed(husky_franka)", "thermal_reference_installed(energy_rig)", "anomaly_localized(energy_rig)"],
+          "effects": {"add": ["docked(husky_base,anomaly_service_dock)", "stationary(husky_base)"], "delete": ["docked(husky_base,reference_dock)"]}
+        },
+        {
+          "name": "return_husky_home",
+          "parameters": [],
+          "parameter_types": [],
+          "resources": ["husky_route"],
+          "action_type": "navigation",
+          "duration_ticks": 6,
+          "timeout_ticks": 45,
+          "preconditions": ["system_ready()", "robot_ready(husky_base)", "docked(husky_base,anomaly_service_dock)", "stationary(husky_base)", "stowed(husky_franka)", "marker_attached(energy_rig)"],
+          "effects": {"add": ["docked(husky_base,husky_home)", "stationary(husky_base)"], "delete": ["docked(husky_base,anomaly_service_dock)"]}
+        }
+      ]
+    },
+    {
+      "id": "husky_franka",
+      "name": "Franka Emika Panda mounted on Husky",
+      "type": "mobile_manipulator",
+      "capabilities": [
+        {
+          "name": "load_inspection_kit",
+          "parameters": ["kit"],
+          "parameter_types": ["tool"],
+          "resources": ["handoff_zone"],
+          "action_type": "manipulation",
+          "duration_ticks": 3,
+          "timeout_ticks": 24,
+          "preconditions": ["system_ready()", "robot_ready(husky_franka)", "docked(husky_base,husky_home)", "stationary(husky_base)", "stowed(husky_franka)", "gripper_empty(husky_franka)", "kit_ready(kit)", "at(kit,handoff_tray)"],
+          "effects": {"add": ["holding(husky_franka,kit)", "kit_secured(husky_franka,kit)", "stowed(husky_franka)"], "delete": ["at(kit,handoff_tray)", "gripper_empty(husky_franka)"]}
+        },
+        {
+          "name": "install_thermal_reference",
+          "parameters": ["kit", "rig"],
+          "parameter_types": ["tool", "fixture"],
+          "resources": ["anomaly_service_zone"],
+          "action_type": "manipulation",
+          "duration_ticks": 4,
+          "timeout_ticks": 28,
+          "preconditions": ["system_ready()", "robot_ready(husky_franka)", "docked(husky_base,reference_dock)", "stationary(husky_base)", "holding(husky_franka,kit)", "kit_secured(husky_franka,kit)"],
+          "effects": {"add": ["at(kit,reference_mount)", "thermal_reference_installed(rig)", "marker_available(husky_franka)", "gripper_empty(husky_franka)", "stowed(husky_franka)"], "delete": ["holding(husky_franka,kit)", "kit_secured(husky_franka,kit)"]}
+        },
+        {
+          "name": "confirm_reported_anomaly",
+          "parameters": ["rig"],
+          "parameter_types": ["fixture"],
+          "resources": ["anomaly_service_zone"],
+          "action_type": "verification",
+          "duration_ticks": 3,
+          "timeout_ticks": 24,
+          "preconditions": ["system_ready()", "robot_ready(husky_franka)", "docked(husky_base,anomaly_service_dock)", "stationary(husky_base)", "stowed(husky_franka)", "gripper_empty(husky_franka)", "anomaly_localized(rig)"],
+          "effects": {"add": ["anomaly_confirmed(rig)", "stowed(husky_franka)"], "delete": []}
+        },
+        {
+          "name": "attach_inspection_marker",
+          "parameters": ["rig"],
+          "parameter_types": ["fixture"],
+          "resources": ["anomaly_service_zone"],
+          "action_type": "manipulation",
+          "duration_ticks": 3,
+          "timeout_ticks": 24,
+          "preconditions": ["system_ready()", "robot_ready(husky_franka)", "docked(husky_base,anomaly_service_dock)", "stationary(husky_base)", "stowed(husky_franka)", "marker_available(husky_franka)", "anomaly_confirmed(rig)"],
+          "effects": {"add": ["marker_attached(rig)", "stowed(husky_franka)", "gripper_empty(husky_franka)"], "delete": ["marker_available(husky_franka)"]}
+        },
+        {
+          "name": "isolate_energy_rig",
+          "parameters": ["rig", "control"],
+          "parameter_types": ["fixture", "fixture"],
+          "resources": ["static_control_zone"],
+          "action_type": "manipulation",
+          "duration_ticks": 3,
+          "timeout_ticks": 24,
+          "preconditions": ["system_ready()", "robot_ready(husky_franka)", "docked(husky_base,anomaly_service_dock)", "stationary(husky_base)", "stowed(husky_franka)", "gripper_empty(husky_franka)", "anomaly_confirmed(rig)", "marker_attached(rig)", "asset_active(rig)"],
+          "effects": {"add": ["asset_isolated(rig)", "stowed(husky_franka)", "gripper_empty(husky_franka)"], "delete": ["asset_active(rig)"]}
+        }
+      ]
+    },
+    {
+      "id": "static_franka",
+      "name": "Static Franka Emika Panda",
+      "type": "fixed_manipulator",
+      "capabilities": [
+        {
+          "name": "prepare_inspection_kit",
+          "parameters": ["kit"],
+          "parameter_types": ["tool"],
+          "resources": [],
+          "action_type": "manipulation",
+          "duration_ticks": 3,
+          "timeout_ticks": 24,
+          "preconditions": ["system_ready()", "robot_ready(static_franka)", "arm_home(static_franka)", "gripper_empty(static_franka)", "at(kit,kit_supply)"],
+          "effects": {"add": ["holding(static_franka,kit)"], "delete": ["at(kit,kit_supply)", "gripper_empty(static_franka)", "arm_home(static_franka)"]}
+        },
+        {
+          "name": "place_inspection_kit_handoff",
+          "parameters": ["kit"],
+          "parameter_types": ["tool"],
+          "resources": ["handoff_zone"],
+          "action_type": "manipulation",
+          "duration_ticks": 3,
+          "timeout_ticks": 24,
+          "preconditions": ["system_ready()", "robot_ready(static_franka)", "holding(static_franka,kit)"],
+          "effects": {"add": ["at(kit,handoff_tray)", "kit_ready(kit)", "gripper_empty(static_franka)", "arm_home(static_franka)"], "delete": ["holding(static_franka,kit)"]}
+        }
+      ]
+    }
+  ]
+}

@@ -21,12 +21,16 @@ class LiveViewerSession:
         data: mujoco.MjData,
         *,
         realtime_factor: float,
+        initial_camera: str = "overview",
+        initial_title: str = "ADAPTIVE BT DEMO",
     ) -> None:
         if realtime_factor <= 0:
             raise ValueError("--realtime-factor must be greater than zero.")
         self.model = model
         self.data = data
         self.realtime_factor = realtime_factor
+        self.initial_camera = initial_camera
+        self.initial_title = initial_title
         self._handle: Any = None
         self._camera: str | None = None
         self._status: tuple[str, str] | None = None
@@ -51,9 +55,9 @@ class LiveViewerSession:
         now = time.perf_counter()
         self._next_step_wall = now
         self._last_viewer_sync = now
-        self.set_camera("overview")
+        self.set_camera(self.initial_camera)
         self.set_status(
-            "ADAPTIVE BT DEMO",
+            self.initial_title,
             "Preparing the MuJoCo scene\nThe recorded video uses the same action-directed cuts",
         )
         self._handle.sync()

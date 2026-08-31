@@ -57,6 +57,7 @@ The repository provides:
 - [Collaborative packing and room-delivery scenario](examples/three_robot_packaging_delivery.json) and its [committed reference BT](examples/three_robot_packaging_delivery.bt.json)
 - [Courier scenario](examples/three_robot_courier.json) and its [committed reference BT](examples/three_robot_courier.bt.json)
 - [Single-component installation scenario](examples/three_robot_component_installation.json), [nominal BT](examples/three_robot_component_installation.bt.json), [fault contract](examples/three_robot_component_installation.fault.json), and [offline fallen-part recovery oracle](examples/three_robot_component_installation.expected_recovery.bt.json)
+- [Five-agent solar/pipe inspection scenario](examples/five_agent_solar_pipe_inspection.json) and its [committed regression BT](examples/five_agent_solar_pipe_inspection.bt.json)
 - [Blank template](templates/three_robot_scenario.template.json)
 - [JSON Schema](schemas/scenario.schema.json)
 
@@ -225,6 +226,85 @@ lmrbtp mujoco `
   --scenario examples/three_robot_packaging_delivery.json `
   --bt "C:\path\to\behavior_tree.json"
 ```
+
+### Generate and run the five-agent inspection mission
+
+The inspection mission coordinates B2 locomotion, its mounted Z1 thermal-camera arm, a Husky
+base, the Franka mounted on Husky, and a static Franka. The static Franka prepares the inspection
+kit; Husky/Franka installs a thermal reference; B2/Z1 scans a solar panel and a three-joint pipe
+rig; the measured hot joint is confirmed and marked; the isolation switch is actuated; and Z1
+records a post-isolation verification measurement.
+
+Generate the five synchronized BTs with OpenAI and automatically launch the live MuJoCo viewer.
+The video is recorded by default with action-directed handoff, route, solar, pipe, and service
+angles:
+
+```powershell
+$env:OPENAI_API_KEY = "your-key"
+lmrbtp inspection-demo --output outputs/paper-complementary/five-agent-inspection
+```
+
+Use `--headless` on a displayless machine, `--no-video` for a faster physical integration check,
+or the standard video resolution/fps options. The LLM output must pass strict parsing, static
+validation, and deterministic contract simulation before MuJoCo is built. The exact published
+`behavior_tree.json` is then executed without action rewriting.
+
+For offline development, the committed adjacent BT can exercise the same physical adapter without
+an API call:
+
+```powershell
+lmrbtp mujoco `
+  --scenario examples/five_agent_solar_pipe_inspection.json `
+  --headless `
+  --record-video `
+  --output outputs/five-agent-inspection
+```
+
+The committed BT is a regression fixture, not evidence of a fresh model call. For paper results,
+use `inspection-demo` and retain its generation bundle. The execution report archives the hidden
+localized site, sensor-to-target ranges, 28.5 C baseline, pre-isolation thermal peak, measured
+switch state, post-isolation peak, all BT events, final goals, resource release, model commits,
+and recording checksums. MuJoCo does not simulate heat transfer; the thermal values are a seeded,
+deterministic sensor abstraction gated by the physical Z1 pose, B2 dock, range, and isolation
+switch state.
+
+### Run five-agent inspection with online dropped-tool recovery
+
+This experiment keeps the nominal inspection input unchanged and seals the tool-drop fault until
+after GPT-5.6 Sol has produced and validated all five nominal BTs. The only inspection kit is then
+knocked from the handoff tray as a dynamic MuJoCo free body. Its audit coordinates are not sent to
+the recovery model. The adapted BT must move B2 to a search viewpoint, use Z1 to localize the tool,
+send Husky to the resulting recovery dock, and have Husky's Panda recover that same tool before the
+solar/pipe mission continues in the same model/data state.
+
+```powershell
+lmrbtp inspection-adaptive-demo `
+  --model gpt-5.6-sol `
+  --output outputs/paper-complementary/inspection-adaptive
+```
+
+The default run opens the live viewer and records an action-directed video. During the LLM call,
+physics stays frozen and both the viewer and final video show a failure-handling status layer. Use
+`--headless --no-video` for a fast integration check. The output bundle includes both generated BTs,
+the sealed fault, failure snapshot, prompts and provider responses, validation/simulation reports,
+same-state evidence, physical report, diff, log, video, and checksummed manifest.
+
+### Generate and run the pipe-only leak-repair mission
+
+The pipe-only scenario still uses all five controllers: B2 positions the stowed Z1, Z1 detects and
+localizes a seeded hot leak, the static Panda supplies the single repair tool, Husky transports its
+mounted Panda to the leak, and that Panda closes a measured MuJoCo repair collar. Z1 then rejects or
+accepts the repair from a second thermal observation.
+
+```powershell
+lmrbtp pipe-repair-demo `
+  --model gpt-5.6-sol `
+  --output outputs/paper-complementary/pipe-repair
+```
+
+For an offline adapter check, run `lmrbtp mujoco --scenario
+examples/five_agent_pipe_leak_repair.json --headless`; its adjacent BT is a regression fixture and
+must not be reported as fresh LLM evidence.
 
 ### Record publication-quality simulation videos
 

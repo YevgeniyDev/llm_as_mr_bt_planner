@@ -102,7 +102,7 @@
           "type": "array",
           "items": {
             "type": "string",
-            "enum": ["robot", "fixed_manipulator", "mobile_manipulator", "part", "carrier", "location", "dock", "zone", "route", "fixture", "tool"]
+            "enum": ["robot", "fixed_manipulator", "mobile_manipulator", "mobile_base", "sensor_manipulator", "part", "carrier", "location", "dock", "zone", "route", "fixture", "tool"]
           }
         },
         "resources": {"$ref": "#/$defs/identifierList"},
@@ -125,7 +125,7 @@
         "name": {"type": "string", "minLength": 1},
         "type": {
           "type": "string",
-          "enum": ["fixed_manipulator", "mobile_manipulator"]
+          "enum": ["fixed_manipulator", "mobile_manipulator", "mobile_base", "sensor_manipulator"]
         },
         "capabilities": {
           "type": "array",

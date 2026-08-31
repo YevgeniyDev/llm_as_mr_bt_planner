@@ -71,9 +71,13 @@ class OpenAIResponsesRecoveryClient:
         base_url: str | None = None,
         timeout: float | None = None,
         reasoning_effort: str = DEFAULT_REASONING_EFFORT,
+        response_schema: dict[str, Any] | None = None,
+        structured_output_name: str = "multi_robot_recovery_bt",
     ) -> None:
         self.model = model
         self.reasoning_effort = reasoning_effort
+        self.response_schema = response_schema or recovery_plan_json_schema()
+        self.structured_output_name = structured_output_name
         self._api_key = api_key or os.environ.get("OPENAI_API_KEY")
         self._base_url = (
             base_url or os.environ.get("OPENAI_BASE_URL") or "https://api.openai.com/v1"
@@ -97,9 +101,9 @@ class OpenAIResponsesRecoveryClient:
             "text": {
                 "format": {
                     "type": "json_schema",
-                    "name": "multi_robot_recovery_bt",
+                    "name": self.structured_output_name,
                     "strict": True,
-                    "schema": recovery_plan_json_schema(),
+                    "schema": self.response_schema,
                 }
             },
             "max_output_tokens": 12000,
@@ -134,7 +138,7 @@ class OpenAIResponsesRecoveryClient:
                 "endpoint": self._responses_url(),
                 "model": self.model,
                 "reasoning": {"effort": self.reasoning_effort},
-                "structured_output": "multi_robot_recovery_bt",
+                "structured_output": self.structured_output_name,
                 "max_output_tokens": payload["max_output_tokens"],
                 "store": False,
             },
@@ -354,8 +358,12 @@ def plan_diff(nominal: Plan, adapted: Plan) -> str:
     ) + "\n"
 
 
-def recovery_plan_json_schema() -> dict[str, Any]:
-    """Strict structured-output schema for the three declared recovery robots."""
+def recovery_plan_json_schema(
+    *,
+    mission_id: str = "three_robot_component_installation",
+    robots: tuple[str, ...] = ("franka_a", "unitree_go2_z1", "franka_b"),
+) -> dict[str, Any]:
+    """Strict structured-output schema for a declared recovery mission and robot set."""
     source = {"type": "string", "const": "llm"}
     common = {
         "id": {"type": "string", "minLength": 1},
@@ -418,14 +426,13 @@ def recovery_plan_json_schema() -> dict[str, Any]:
             leaf("ReleaseResource"),
         ]
     }
-    robots = ("franka_a", "unitree_go2_z1", "franka_b")
     return {
         "type": "object",
         "properties": {
             "schema_version": {"type": "string", "const": "2.0"},
             "mission_id": {
                 "type": "string",
-                "const": "three_robot_component_installation",
+                "const": mission_id,
             },
             "behavior_trees": {
                 "type": "object",

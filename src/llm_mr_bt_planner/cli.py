@@ -28,6 +28,11 @@ RECOVERY_FAULT = PROJECT_ROOT / "examples" / "three_robot_component_installation
 RECOVERY_ORACLE_BT = (
     PROJECT_ROOT / "examples" / "three_robot_component_installation.expected_recovery.bt.json"
 )
+INSPECTION_SCENARIO = PROJECT_ROOT / "examples" / "five_agent_solar_pipe_inspection.json"
+INSPECTION_TOOL_DROP_FAULT = (
+    PROJECT_ROOT / "examples" / "five_agent_solar_pipe_inspection_tool_drop.fault.json"
+)
+PIPE_REPAIR_SCENARIO = PROJECT_ROOT / "examples" / "five_agent_pipe_leak_repair.json"
 DEFAULT_TEMPLATE = PROJECT_ROOT / "templates" / "three_robot_scenario.template.json"
 
 
@@ -150,6 +155,81 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     physical.set_defaults(func=_cmd_mujoco)
+
+    inspection = sub.add_parser(
+        "inspection-demo",
+        help="Generate five coordinated inspection BTs with an LLM, then launch MuJoCo automatically.",
+    )
+    inspection.add_argument("--scenario", default=str(INSPECTION_SCENARIO))
+    inspection.add_argument("--model", default="gpt-5.6-sol")
+    inspection.add_argument("--use-saved-key", action="store_true")
+    inspection.add_argument("--max-corrections", type=int, default=4)
+    inspection.add_argument("--max-ticks", type=int, default=300)
+    inspection.add_argument("--assets-dir", default=None)
+    inspection.add_argument("--output", default=str(PROJECT_ROOT / "outputs" / "inspection-demo"))
+    inspection.add_argument("--headless", action="store_true")
+    inspection.add_argument("--max-seconds", type=float, default=100.0)
+    inspection.add_argument("--realtime-factor", type=float, default=1.0)
+    inspection.add_argument("--no-video", action="store_true")
+    inspection.add_argument("--video-fps", type=int, default=None)
+    inspection.add_argument("--video-width", type=int, default=None)
+    inspection.add_argument("--video-height", type=int, default=None)
+    inspection.add_argument("--video-camera", default=None)
+    inspection.set_defaults(func=_cmd_inspection_demo)
+
+    pipe_repair = sub.add_parser(
+        "pipe-repair-demo",
+        help="Generate a five-agent pipe-leak repair BT with an LLM, then launch MuJoCo.",
+    )
+    pipe_repair.add_argument("--scenario", default=str(PIPE_REPAIR_SCENARIO))
+    pipe_repair.add_argument("--model", default="gpt-5.6-sol")
+    pipe_repair.add_argument("--use-saved-key", action="store_true")
+    pipe_repair.add_argument("--max-corrections", type=int, default=4)
+    pipe_repair.add_argument("--max-ticks", type=int, default=300)
+    pipe_repair.add_argument("--assets-dir", default=None)
+    pipe_repair.add_argument("--output", default=str(PROJECT_ROOT / "outputs" / "pipe-repair-demo"))
+    pipe_repair.add_argument("--headless", action="store_true")
+    pipe_repair.add_argument("--max-seconds", type=float, default=120.0)
+    pipe_repair.add_argument("--realtime-factor", type=float, default=1.0)
+    pipe_repair.add_argument("--no-video", action="store_true")
+    pipe_repair.add_argument("--video-fps", type=int, default=None)
+    pipe_repair.add_argument("--video-width", type=int, default=None)
+    pipe_repair.add_argument("--video-height", type=int, default=None)
+    pipe_repair.add_argument("--video-camera", default=None)
+    pipe_repair.set_defaults(func=_cmd_inspection_demo)
+
+    inspection_adaptive = sub.add_parser(
+        "inspection-adaptive-demo",
+        help=(
+            "Generate fault-blind five-agent inspection BTs, drop the tool in MuJoCo, "
+            "adapt with an LLM, and resume the same simulation."
+        ),
+    )
+    inspection_adaptive.add_argument("--scenario", default=str(INSPECTION_SCENARIO))
+    inspection_adaptive.add_argument("--fault", default=str(INSPECTION_TOOL_DROP_FAULT))
+    inspection_adaptive.add_argument("--model", default="gpt-5.6-sol")
+    inspection_adaptive.add_argument(
+        "--reasoning-effort",
+        choices=["low", "medium", "high", "xhigh", "max"],
+        default="high",
+    )
+    inspection_adaptive.add_argument("--generation-max-corrections", type=int, default=4)
+    inspection_adaptive.add_argument("--recovery-max-corrections", type=int, default=3)
+    inspection_adaptive.add_argument("--max-ticks", type=int, default=400)
+    inspection_adaptive.add_argument("--max-seconds", type=float, default=180.0)
+    inspection_adaptive.add_argument("--assets-dir", default=None)
+    inspection_adaptive.add_argument(
+        "--output",
+        default=str(PROJECT_ROOT / "outputs" / "inspection-adaptive-demo"),
+    )
+    inspection_adaptive.add_argument("--headless", action="store_true")
+    inspection_adaptive.add_argument("--realtime-factor", type=float, default=1.0)
+    inspection_adaptive.add_argument("--heartbeat-seconds", type=float, default=5.0)
+    inspection_adaptive.add_argument("--no-video", action="store_true")
+    inspection_adaptive.add_argument("--video-fps", type=int, default=30)
+    inspection_adaptive.add_argument("--video-width", type=int, default=1920)
+    inspection_adaptive.add_argument("--video-height", type=int, default=1080)
+    inspection_adaptive.set_defaults(func=_cmd_inspection_adaptive_demo)
 
     recovery = sub.add_parser(
         "recovery-experiment",
@@ -722,6 +802,53 @@ def _cmd_mujoco(args: argparse.Namespace) -> int:
             ) from error
         raise
     return run_cli(args)
+
+
+def _cmd_inspection_demo(args: argparse.Namespace) -> int:
+    """Generate an audited LLM BT artifact and execute that exact artifact physically."""
+    scenario_document = PlannerService.load_json(args.scenario)
+    output_root = Path(args.output).resolve()
+    service = PlannerService(output_root / "generation")
+
+    def progress(message: str, fraction: float) -> None:
+        print(f"[BT generation {round(fraction * 100):3d}%] {message}")
+
+    outcome = service.generate(
+        scenario_document,
+        provider="openai",
+        api_key=_provider_key("openai", args.use_saved_key),
+        model=args.model,
+        max_corrections=args.max_corrections,
+        max_ticks=args.max_ticks,
+        progress=progress,
+    )
+    bt_path = outcome.artifacts.behavior_tree_json
+    if bt_path is None or not outcome.validation.valid or not outcome.simulation.success:
+        print(f"Generation diagnostics: {outcome.artifacts.directory.resolve()}")
+        raise RuntimeError("LLM BT did not pass validation and contract simulation; MuJoCo was not launched.")
+    print(f"Accepted LLM BT: {bt_path.resolve()}")
+    print("Launching MuJoCo with the exact accepted artifact (no action rewriting).")
+    args.bt = str(bt_path)
+    args.output = str(output_root / "physical")
+    args.record_video = not args.no_video
+    args.setup_only = False
+    from .mujoco_sim.runner import run_cli
+
+    return run_cli(args)
+
+
+def _cmd_inspection_adaptive_demo(args: argparse.Namespace) -> int:
+    """Run fault-blind five-agent generation and same-state tool recovery."""
+    try:
+        from .mujoco_sim.inspection_adaptive_runner import run_inspection_adaptive_cli
+    except ImportError as error:
+        if error.name in {"mujoco", "numpy", "imageio", "imageio_ffmpeg", "PIL"}:
+            raise RuntimeError(
+                "MuJoCo recording dependencies are missing. Install them with "
+                "python -m pip install -e \".[mujoco]\"."
+            ) from error
+        raise
+    return run_inspection_adaptive_cli(args)
 
 
 def _cmd_recovery_experiment(args: argparse.Namespace) -> int:
