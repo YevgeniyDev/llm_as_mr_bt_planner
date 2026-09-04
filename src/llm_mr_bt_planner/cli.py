@@ -317,7 +317,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     compare = sub.add_parser(
         "compare",
-        help="Prepare, train, and run paper-baseline reproductions under the common protocol.",
+        help="Prepare and run paper-baseline reproductions under the common protocol.",
     )
     methods = compare.add_subparsers(dest="comparison_method", required=True)
     llm_as_bt = methods.add_parser(
@@ -759,6 +759,16 @@ def _cmd_doctor(args: argparse.Namespace) -> int:  # noqa: ARG001
             PROJECT_ROOT / "examples" / "three_robot_packaging_delivery.bt.json",
         ),
         ("recovery nominal", RECOVERY_SCENARIO, RECOVERY_BT),
+        (
+            "five-agent inspection",
+            INSPECTION_SCENARIO,
+            PROJECT_ROOT / "examples" / "five_agent_solar_pipe_inspection.bt.json",
+        ),
+        (
+            "five-agent pipe repair",
+            PIPE_REPAIR_SCENARIO,
+            PROJECT_ROOT / "examples" / "five_agent_pipe_leak_repair.bt.json",
+        ),
     )
     for label, scenario_path, bt_path in references:
         try:

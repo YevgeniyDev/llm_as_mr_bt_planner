@@ -300,13 +300,13 @@ def expand_initial_trees(
         actions,
     )
     if chronological is not None:
-        trees, construction_trace = materialize_chronological_expansion(
+        chronological_trees, construction_trace = materialize_chronological_expansion(
             scenario,
             chronological,
             node_namespace=node_namespace,
         )
         return ExpansionResult(
-            trees=trees,
+            trees=chronological_trees,
             initial_trees=initial_trees,
             assigned_goals=tuple(assigned_goals),
             trace=[*assignment_trace, *construction_trace],
@@ -507,6 +507,7 @@ def materialize_chronological_expansion(
                 and (predicate not in scenario.initial_state or mutable_initial)
             )
             if needs_wait:
+                assert writer is not None
                 precondition_nodes.append(
                     _wait(
                         predicate,

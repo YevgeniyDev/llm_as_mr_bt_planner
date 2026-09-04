@@ -354,6 +354,7 @@ def _build_canonical_trees(
                 and (precondition not in scenario.initial_state or mutable_initial)
             )
             if needs_wait:
+                assert writer is not None
                 steps.append(_wait(precondition, counter.next(action.robot, "monitor")))
                 synchronized[action.robot][precondition] = writer[0]
             else:

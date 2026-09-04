@@ -20,13 +20,13 @@ MODEL_OPTIONS: Final[dict[str, tuple[tuple[str, str], ...]]] = {
     ),
     "anthropic": (
         ("Claude Opus 5 — recommended for complex planning", "claude-opus-5"),
-        ("Claude Fable 5 — highest capability, slower", "claude-fable-5"),
+        ("Claude Fable 5.1 — demanding reasoning, slower", "claude-fable-5-1"),
         ("Claude Sonnet 5 — balanced speed and quality", "claude-sonnet-5"),
         ("Claude Haiku 4.5 — fastest and lowest cost", "claude-haiku-4-5-20251001"),
     ),
 }
 
-MODEL_CATALOG_REVIEWED: Final = "2026-08-11"
+MODEL_CATALOG_REVIEWED: Final = "2026-09-05"
 
 
 def default_model(provider: str) -> str:

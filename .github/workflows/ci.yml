@@ -10,7 +10,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: ["3.10", "3.12"]
+        python-version: ["3.10", "3.12", "3.13"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -22,4 +22,5 @@ jobs:
       - run: python -m ruff check src tests
       - run: python -m mypy src/llm_mr_bt_planner
       - run: python -m pytest -q
+      - run: python -m build --sdist
 

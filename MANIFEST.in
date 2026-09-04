@@ -1,0 +1,9 @@
+include ARTIFACT_EVALUATION.md
+include CHANGELOG.md
+include LICENSE
+include README.md
+include THIRD_PARTY_NOTICES.md
+
+recursive-include examples *.json
+recursive-include schemas *.json
+recursive-include templates *.json

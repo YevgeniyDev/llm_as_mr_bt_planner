@@ -2,14 +2,24 @@
 
 This application uses OpenAI or Anthropic (Claude) to generate complete synchronized Behavior Trees for heterogeneous robot teams. It validates and symbolically simulates the model's exact trees, saves successful results as JSON and XML, and can execute the bundled three-robot and five-agent missions in a separate MuJoCo process.
 
-The demonstration team is:
+The three-robot demonstration team is:
 
 - `franka_a` — Franka Emika Panda at the source station
 - `unitree_go2_z1` — Unitree Go2 with a Z1 arm, transporting the part
 - `franka_b` — Franka Emika Panda at the destination station
 
-The five-agent inspection missions additionally model B2 locomotion, its mounted Z1 thermal
-arm, a Husky base, the Franka mounted on Husky, and a static Franka.
+The five-agent inspection missions use an official B2 model, its mounted Z1 thermal arm, a
+Husky base, the Franka mounted on Husky, and a static Franka.
+
+Platform scope is deliberate. The committed three-robot scenarios and their MuJoCo evidence remain
+Go2/Z1-based so scenario identities, controller mappings, and prior results stay reproducible. The
+five-agent simulation uses B2/Z1 geometry with task-space base translation and a joint-torque stance;
+it does not claim a complete B2 gait controller. The intended mobile platform for final real-world
+evaluation is Unitree B2/Z1. This release contains no hardware execution or sim-to-real evidence, and
+does not relabel Go2 simulation results as B2 results.
+
+For the shortest reviewer workflow, scope boundaries, and expected checks, see
+[Artifact evaluation](ARTIFACT_EVALUATION.md).
 
 ## Overview
 
@@ -33,7 +43,8 @@ Use these links to jump directly to the part of the README you need:
   [LLM-HBT](#llm-hbt-comparison), and [MRBTP](#mrbtp-comparison).
 - **Reference:** [saved projects](#saved-projects),
   [verification boundaries](#what-is-and-is-not-verified), and
-  [development checks](#development-checks).
+  [development checks](#development-checks). See also the standalone
+  [artifact-evaluation guide](ARTIFACT_EVALUATION.md).
 
 ## Install
 
@@ -44,7 +55,8 @@ python -m pip install -e ".[ui]"
 lmrbtp doctor
 ```
 
-`doctor` checks the required packages and verifies the bundled three-robot example without calling an LLM.
+`doctor` checks the required packages and validates and contract-simulates all five committed
+scenario/reference-BT pairs without calling an LLM.
 
 ## Start the user interface
 
@@ -85,6 +97,7 @@ The repository provides:
 - [Courier scenario](examples/three_robot_courier.json) and its [committed reference BT](examples/three_robot_courier.bt.json)
 - [Single-component installation scenario](examples/three_robot_component_installation.json), [nominal BT](examples/three_robot_component_installation.bt.json), [fault contract](examples/three_robot_component_installation.fault.json), and [offline fallen-part recovery oracle](examples/three_robot_component_installation.expected_recovery.bt.json)
 - [Five-agent solar/pipe inspection scenario](examples/five_agent_solar_pipe_inspection.json) and its [committed regression BT](examples/five_agent_solar_pipe_inspection.bt.json)
+- [Five-agent pipe-leak repair scenario](examples/five_agent_pipe_leak_repair.json) and its [committed regression BT](examples/five_agent_pipe_leak_repair.bt.json)
 - [Blank template](templates/three_robot_scenario.template.json)
 - [JSON Schema](schemas/scenario.schema.json)
 
@@ -213,7 +226,7 @@ On successful generation, the final console lines provide `BT_FILE=<absolute pat
 
 ## Run the bundled scenarios in MuJoCo
 
-The physical simulator is a separate optional subsystem. It reads a scenario and an already-generated BT; it does not import the provider clients, call OpenAI or Anthropic, generate a different tree, or apply symbolic capability effects.
+The physics simulator is a separate optional subsystem. It reads a scenario and an already-generated BT; it does not import the provider clients, call OpenAI or Anthropic, generate a different tree, or apply symbolic capability effects.
 
 Install its dependencies and download the three pinned robot models once:
 
@@ -261,6 +274,10 @@ base, the Franka mounted on Husky, and a static Franka. The static Franka prepar
 kit; Husky/Franka installs a thermal reference; B2/Z1 scans a solar panel and a three-joint pipe
 rig; the measured hot joint is confirmed and marked; the isolation switch is actuated; and Z1
 records a post-isolation verification measurement.
+
+In this fixed scene, B2 base translation is a task-space position-servo abstraction while its leg
+joints hold a torque-controlled stance. It is suitable for task-level integration checks, not for a
+B2 locomotion-fidelity or sim-to-real claim.
 
 Generate the five synchronized BTs with OpenAI and automatically launch the live MuJoCo viewer.
 The video is recorded by default with action-directed handoff, route, solar, pipe, and service
@@ -457,7 +474,7 @@ control flow hierarchically. A generated tree that uses an unsupported physical 
 action can still pass symbolic checks, but MuJoCo rejects it with the exact unsupported node
 instead of flattening or rewriting it.
 
-All three scenes contain two independently prefixed 7-DoF Panda models and one Go2 with the Z1 gripper model mounted on its trunk. The courier and component-installation scenes use separated workbenches; component installation adds one free `primary_part` plus object-specific grasp and fixture constraints. The packing scene instead uses one shared assembly bench, opposed Panda mounting positions with collision-safe home poses, a separate room boundary and delivery pedestal, and a travel aisle through the doorway. Controller target sites are hidden and have no collision geometry. The recovery-only `source_floor` site is invisible and has no collision geometry; it represents the diagnosed landing region rather than another scene object.
+Each three-robot scene contains two independently prefixed 7-DoF Panda models and one Go2 with the Z1 gripper model mounted on its trunk. The courier and component-installation scenes use separated workbenches; component installation adds one free `primary_part` plus object-specific grasp and fixture constraints. The packing scene instead uses one shared assembly bench, opposed Panda mounting positions with collision-safe home poses, a separate room boundary and delivery pedestal, and a travel aisle through the doorway. Controller target sites are hidden and have no collision geometry. The recovery-only `source_floor` site is invisible and has no collision geometry; it represents the diagnosed landing region rather than another scene object.
 
 The Go2 free-joint pose is initialized once and never written during execution, so measured displacement comes from leg torques, inertia, and floor contact. Z1 retains the payload in its closed grasp throughout each route and releases it only at the declared destination. Dynamic objects move through actuator-driven differential IK, grasp constraints, and a 12-motor alternating contact gait. Arm-link gravity compensation is enabled, as in the `mjctrl` example; the Go2, package parts, door, and other dynamic bodies remain under full gravity.
 
@@ -779,7 +796,7 @@ The planner genuinely verifies the declared symbolic contract:
 - wait/resource cycles, timeouts, leaks, and cancellation cleanup;
 - symbolic state invariants and final goals.
 
-The separate MuJoCo adapter tests the three bundled BTs against fixed dynamic scenes: hierarchical branch selection, actuator limits, gravity, contacts, reachable Cartesian motion, collaborative assembly, payload transfer, base stability, docking, contact-driven Go2 displacement, hinged-door opening, room delivery, deterministic part loss, and same-state fallen-object retrieval. Its report is evidence for that exact model, controller configuration, fault contract, and initial state only. It does **not** establish general collision avoidance, perception accuracy, diagnosis from real sensors, ROS 2 integration, sim-to-real validity, or physical-robot safety. XML remains an export format rather than a hardware controller.
+The separate MuJoCo adapters test the five bundled reference BTs against fixed scenes. The three-robot adapter covers hierarchical branch selection, actuator limits, gravity, contacts, reachable Cartesian motion, collaborative assembly, payload transfer, base stability, docking, contact-driven Go2 displacement, hinged-door opening, room delivery, deterministic part loss, and same-state fallen-object retrieval. The five-agent adapter covers task-space B2/Husky motion, manipulator poses, and deterministic sensing abstractions. Reports are evidence only for the exact model, controller configuration, fault contract, and initial state recorded in each run. They do **not** establish general collision avoidance, perception accuracy, diagnosis from real sensors, ROS 2 integration, sim-to-real validity, B2 gait fidelity, or physical-robot safety. XML remains an export format rather than a hardware controller.
 
 ## Development checks
 
@@ -797,3 +814,10 @@ python -m llm_mr_bt_planner doctor
 
 Automated generation tests use the clearly named `test-reference-client`; they do not call or impersonate a production provider.
 The committed reference BT is a test fixture, not evidence of a live LLM generation run. Production `generate` and UI runs always require the selected provider and an API key.
+
+## License
+
+The project source is released under the [MIT License](LICENSE). Third-party models, comparison
+sources, and controller references retain their own terms as listed in
+[Third-party notices](THIRD_PARTY_NOTICES.md); those upstream sources are downloaded into ignored
+output directories and are not redistributed here.

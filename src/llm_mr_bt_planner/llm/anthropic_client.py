@@ -7,7 +7,8 @@ blocks. The default model is ``claude-opus-5``; JSON is requested via the
 prompt (the plan schema is mildly recursive, so structured-output schemas do not
 apply cleanly here).
 
-Note: on Opus 4.7/4.8 ``temperature`` is not a valid parameter, so it is omitted.
+Note: current Claude models deprecate custom sampling parameters, so
+``temperature`` is intentionally omitted.
 """
 
 from __future__ import annotations

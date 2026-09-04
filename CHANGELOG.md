@@ -2,7 +2,7 @@
 
 All notable changes to the project are recorded here.
 
-## Unreleased
+## 0.8.0 - 2026-09-05
 
 ### Added
 
@@ -17,12 +17,28 @@ All notable changes to the project are recorded here.
 - Added pinned verification of the arXiv v1 source and author project page, an explicit unavailable-code/unreported-inference fidelity boundary, nominal and same-object floor-recovery commands, ordered decision replay, complete native/canonical audit artifacts, and tests proving that invalid LLM recovery choices are rejected rather than repaired.
 - Added the fifth isolated comparison method, MRBTP, as the non-LLM nominal reference. Its source-aligned FIFO planner retains per-robot action spaces, shared-queue in-tree/cross-tree expansion, regressed premises, subset/conflict pruning, full native backup forests, and intention-sharing evidence with the optional LLM subtree plugin disabled.
 - Added complete MIT-licensed official-source preparation and verification at pinned commit `3d6bd240aa2903245b2335711a97ee394f174313`, deterministic CLI execution, native/common audit artifacts, zero-call metrics, and tests for the heterogeneous eight-action handoff protocol, failure bounds, source integrity, and provenance isolation.
+- Added a concise artifact-evaluation guide covering deterministic verification, optional MuJoCo execution, evidence boundaries, submission hygiene, and the exact Go2-simulation/B2-hardware distinction.
+- Added the repository's MIT license file and modern PEP 639 package-license metadata.
 
 ### Changed
 
 - Narrowed the primary paper comparison to LLM-as-BT-Planner, LLM-BT, BETR-XP-LLM, LLM-HBT, and MRBTP; removed the non-selected LLM-MARS, SMART-LLM, hierarchical mission-tree, BTGenBot, and BTGenBot-2 runners, commands, dependencies, tests, and implementation documentation while retaining their related-work discussion.
 - Corrected static validation of reactive BT goal guards: a `Condition` before an action that can establish it is a valid selector/fallback branch, not an implicit wait-before-producer error. Explicit synchronization remains represented only by `WaitFor`.
 - Added explicit comparison-only validator options for planner-authored provenance and reactive backup policies. The default direct-generation profile remains unchanged and accepts only LLM-authored nodes.
+- Preserved the three-robot Go2/Z1 scenarios and evidence while documenting B2/Z1 as the intended final real-world platform; the existing five-agent B2 simulation remains separately identified and does not claim gait or hardware fidelity.
+- Refreshed the Anthropic catalog with Claude Fable 5.1 and recorded the September 2026 catalog review date.
+- Expanded `lmrbtp doctor` to validate and contract-simulate all five committed nominal scenario/reference-BT pairs.
+- Updated CI to cover Python 3.13 and build the complete source distribution after lint, type, and test checks.
+- Promoted the package version to `0.8.0` for the complete comparison-runner and submission-preparation release.
+
+### Fixed
+
+- Fixed three strict-mypy errors in the LLM-BT and LLM-HBT native comparison planners without changing runtime behavior.
+- Corrected the local ICRA draft's Go2/B2 claims, PaperCept class, figure lookup, artifact wording, and generative-AI disclosure.
+
+### Removed
+
+- Removed superseded planning notes and the unreferenced root-level generated BT artifact; committed examples remain the only reference BT fixtures.
 
 ## 0.7.0 - 2026-08-21
 

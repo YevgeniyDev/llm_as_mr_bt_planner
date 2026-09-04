@@ -7,7 +7,7 @@ scenarios. ROS 2, perception, and hardware execution remain outside this release
 
 from __future__ import annotations
 
-__version__ = "0.7.0"
+__version__ = "0.8.0"
 
 from .domain import Scenario, load_scenario, parse_scenario
 from .llm import AnthropicClient, OpenAIClient, get_client

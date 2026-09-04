@@ -16,10 +16,12 @@ env/
 .mypy_cache/
 .ruff_cache/
 
-# Generated application outputs
+# Generated application outputs and local experiment evidence
 outputs/
 projects/
 MUJOCO_LOG.TXT
+
+# Local manuscript workspace (not part of the anonymous software artifact)
 paper/
 
 # Packaging

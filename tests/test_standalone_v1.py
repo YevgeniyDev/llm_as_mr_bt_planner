@@ -338,6 +338,8 @@ def test_current_provider_model_catalog_is_explicit_and_uses_current_defaults(mo
         "gpt-5.6-sol",
     )
     assert is_catalog_model("openai", "gpt-5.6-terra")
+    assert is_catalog_model("anthropic", "claude-fable-5-1")
+    assert not is_catalog_model("anthropic", "claude-fable-5")
     assert is_catalog_model("anthropic", "claude-sonnet-5")
     assert not is_catalog_model("anthropic", "gpt-5.6-sol")
 
