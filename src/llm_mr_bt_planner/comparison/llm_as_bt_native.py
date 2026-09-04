@@ -230,7 +230,8 @@ def native_forest_to_plan(
     """Observe native trees as per-robot canonical BTs without action repair."""
     builder = _CanonicalBuilder(scenario, wait_timeout_ticks)
     per_robot: dict[str, list[BTNode]] = {robot.id: [] for robot in scenario.robots}
-    producers: dict[str, str] = {}
+    producers: dict[str, tuple[str, int]] = {}
+    producer_version = 0
     for _subgoal_id, robot_id, tree in trees:
         per_robot[robot_id].append(builder.convert(tree, robot_id, producers))
         for node in iter_kios_nodes(tree):
@@ -240,9 +241,10 @@ def native_forest_to_plan(
             capability = scenario.capability(robot_id, action)
             if capability is None or not arguments or arguments[0] != robot_id:
                 continue
+            producer_version += 1
             bindings = dict(zip(capability.parameters, arguments[1:]))
             for effect in capability.effects.add:
-                producers[substitute(effect, bindings)] = robot_id
+                producers[substitute(effect, bindings)] = (robot_id, producer_version)
 
     document: dict[str, Any] = {
         "schema_version": "2.0",
@@ -271,16 +273,39 @@ class _CanonicalBuilder:
         self.scenario = scenario
         self.wait_timeout_ticks = wait_timeout_ticks
         self.counter = 0
+        self.synchronized: dict[str, dict[str, int]] = {
+            robot.id: {} for robot in scenario.robots
+        }
+        self.deleted_by: dict[str, set[str]] = {}
+        for robot in scenario.robots:
+            for capability in robot.capabilities:
+                for predicate in capability.effects.delete:
+                    self.deleted_by.setdefault(predicate, set()).add(robot.id)
 
     def next_id(self, label: str) -> str:
         self.counter += 1
         safe = re.sub(r"[^A-Za-z0-9_.-]+", "-", label).strip("-") or "node"
         return f"kios.{self.counter:04d}.{safe}"
 
-    def convert(self, node: KiosNode, robot_id: str, producers: dict[str, str]) -> BTNode:
+    def convert(
+        self,
+        node: KiosNode,
+        robot_id: str,
+        producers: dict[str, tuple[str, int]],
+    ) -> BTNode:
         if node.kind in _COMPOSITES:
             node_type = {"selector": "Fallback", "sequence": "ReactiveSequence", "parallel": "ParallelAll"}[node.kind]
             children = [self.convert(child, robot_id, producers) for child in node.children]
+            if node.kind == "sequence" and len(children) > 1:
+                prefix, final = children[:-1], children[-1]
+
+                def synchronization_key(child: BTNode) -> tuple[int, int]:
+                    if child.type != "WaitFor":
+                        return 0, -1
+                    producer = producers.get(child.label())
+                    return 1, producer[1] if producer is not None else -1
+
+                children = [*sorted(prefix, key=synchronization_key), final]
             return BTNode(
                 type=node_type,
                 node_id=self.next_id(node.kind),
@@ -291,7 +316,20 @@ class _CanonicalBuilder:
         name, parameters = parse_predicate(node.body)
         if node.kind in _CONDITIONS:
             predicate = format_predicate(name, parameters)
-            cross_robot = node.kind == "precondition" and producers.get(predicate) not in {None, robot_id}
+            producer = producers.get(predicate)
+            mutable_initial = bool(
+                predicate in self.scenario.initial_state
+                and (self.deleted_by.get(predicate, set()) - {robot_id})
+            )
+            cross_robot = bool(
+                node.kind == "precondition"
+                and producer is not None
+                and producer[0] != robot_id
+                and producer[1] > self.synchronized[robot_id].get(predicate, -1)
+                and (predicate not in self.scenario.initial_state or mutable_initial)
+            )
+            if cross_robot and producer is not None:
+                self.synchronized[robot_id][predicate] = producer[1]
             return BTNode(
                 type="WaitFor" if cross_robot else "Condition",
                 node_id=self.next_id(node.kind),

@@ -315,13 +315,47 @@ def _build_canonical_trees(
 ) -> dict[str, BTNode]:
     counter = _NodeCounter(namespace)
     children: dict[str, list[BTNode]] = {robot.id: [] for robot in scenario.robots}
+    producer_versions: dict[str, tuple[int, str]] = {}
+    synchronized: dict[str, dict[str, int]] = {
+        robot.id: {} for robot in scenario.robots
+    }
+    deleted_by: dict[str, set[str]] = {}
     for selected in planned:
+        for predicate in selected.action.delete_effects:
+            deleted_by.setdefault(predicate, set()).add(selected.action.robot)
+
+    for plan_index, selected in enumerate(planned):
         action = selected.action
         steps: list[BTNode] = []
-        for precondition in action.preconditions:
-            producer = producers.get(precondition)
-            if producer is not None and producer != action.robot:
+        external = set(selected.external_preconditions)
+
+        def synchronization_key(
+            predicate: str,
+            external_conditions: frozenset[str] = frozenset(external),
+        ) -> tuple[int, int]:
+            writer = producer_versions.get(predicate)
+            return (
+                (1, writer[0])
+                if predicate in external_conditions and writer is not None
+                else (0, -1)
+            )
+
+        for precondition in sorted(action.preconditions, key=synchronization_key):
+            writer = producer_versions.get(precondition)
+            mutable_initial = bool(
+                precondition in scenario.initial_state
+                and (deleted_by.get(precondition, set()) - {action.robot})
+            )
+            needs_wait = bool(
+                precondition in external
+                and writer is not None
+                and writer[1] != action.robot
+                and writer[0] > synchronized[action.robot].get(precondition, -1)
+                and (precondition not in scenario.initial_state or mutable_initial)
+            )
+            if needs_wait:
                 steps.append(_wait(precondition, counter.next(action.robot, "monitor")))
+                synchronized[action.robot][precondition] = writer[0]
             else:
                 steps.append(_condition(precondition, counter.next(action.robot, "precondition")))
         for resource in sorted(action.resources):
@@ -371,8 +405,13 @@ def _build_canonical_trees(
             ],
         )
         children[action.robot].append(branch)
+        for effect in action.add_effects:
+            producer_versions[effect] = (plan_index, action.robot)
 
+    final_goals = set(scenario.goal_state)
     for condition in conditions:
+        if condition not in final_goals:
+            continue
         owner = producers.get(condition) or _condition_owner_hint(condition, scenario)
         if owner is None:
             owner = scenario.robots[0].id

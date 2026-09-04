@@ -89,6 +89,8 @@ def test_nominal_prompt_is_strict_and_fault_blind():
 
     assert "Conditions:" in prompt and "Objects:" in prompt
     assert "Scene information:" in prompt and "Examples:" in prompt
+    assert "Required final conditions for the common evaluation protocol:" in prompt
+    assert "installed_component(target_fixture)" in prompt
     assert "Goal: one well-formed formula" in prompt
     assert "source_floor" not in prompt
     assert "dropped_to_floor" not in prompt

@@ -22,6 +22,7 @@ from llm_mr_bt_planner.comparison.llm_bt_native import (
 from llm_mr_bt_planner.comparison.llm_bt_parser import (
     LLMBTParserError,
     ReplayKeywordParser,
+    TransformersKeywordParser,
     parse_predictions,
 )
 from llm_mr_bt_planner.comparison.llm_bt_source import (
@@ -139,6 +140,16 @@ def test_semantic_map_and_nominal_prompt_expose_no_future_failure():
     assert "failure" not in REASONING_SYSTEM_PROMPT.lower()
 
 
+def test_alias_catalog_puts_one_alias_per_protocol_goal_first():
+    scenario = load_scenario(ROOT / "examples" / "five_agent_solar_pipe_inspection.json", strict=True)
+    catalog = build_alias_catalog(scenario)
+
+    leading = catalog[: len(scenario.goal_state)]
+    assert [entry.predicate for entry in leading] == list(scenario.goal_state)
+    assert len({entry.key for entry in catalog}) == len(catalog)
+    assert all(int(entry.target.rsplit("_", 1)[1]) <= 9 for entry in catalog)
+
+
 def test_released_parser_state_machine_joins_wordpieces_and_rejects_drift():
     moves = parse_predictions(
         [
@@ -165,6 +176,42 @@ def test_released_parser_state_machine_joins_wordpieces_and_rejects_drift():
         parse_predictions([{"entity": "B-Target", "word": "object"}])
     with pytest.raises(LLMBTParserError, match="missing a target or destination"):
         parse_predictions([{"entity": "B-Action", "word": "move"}])
+
+
+def test_transformers_parser_classifies_numbered_moves_independently():
+    parser = object.__new__(TransformersKeywordParser)
+    parser.model = "test-checkpoint"
+    parser._device = "cpu"
+    parser._versions = {"torch": "test", "transformers": "test"}
+    seen: list[str] = []
+
+    class Scalar:
+        @staticmethod
+        def item() -> float:
+            return 0.99
+
+    def classify(text: str) -> list[dict[str, object]]:
+        seen.append(text)
+        number = "5" if text.startswith("1.") else "7"
+        destination = "15" if number == "5" else "17"
+        return [
+            {"entity": "B-Action", "word": "Move", "score": Scalar()},
+            {"entity": "B-Target", "word": "object"},
+            {"entity": "I-Target", "word": number},
+            {"entity": "B-Destination", "word": "position"},
+            {"entity": "I-Destination", "word": destination},
+        ]
+
+    parser._pipeline = classify
+    result = parser.parse("1. Move object 5 to position 15.\n2. Move object 7 to position 17.")
+
+    assert seen == [
+        "1. Move object 5 to position 15.",
+        "2. Move object 7 to position 17.",
+    ]
+    assert [move.target for move in result.moves] == ["object_5", "object_7"]
+    assert result.metadata["input_segment_count"] == 2
+    assert result.predictions[0]["score"] == 0.99
 
 
 def test_nominal_replay_expands_atl_and_passes_common_protocol(tmp_path):

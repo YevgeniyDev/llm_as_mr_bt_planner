@@ -119,7 +119,7 @@ class ProviderGenerator:
         options: dict[str, Any] = {
             "model": self.model,
             "api_key": self._api_key,
-            "max_tokens": 1200,
+            "max_tokens": 4000,
         }
         if self.provider == "openai":
             options.update(
@@ -779,7 +779,9 @@ def _finish_run(
             ],
             "output_adaptations": [
                 "paper Selector/Sequence/Condition/Action notation is observed as common BT JSON",
-                "delegated requester monitoring is represented by bounded common WaitFor leaves",
+                "LLM-selected intermediate milestones remain extension triggers while only protocol goals become terminal assertions",
+                "delegated requester monitoring is represented by bounded common WaitFor leaves with versioned producer tracking",
+                "redundant monitors are suppressed and repeated phased handshakes are ordered by causal production version",
                 "exclusive-resource operations required by a selected low-level capability are explicit common leaves",
                 "recovery materializes the remaining continuation because common simulation does not persist native tick memory",
             ],

@@ -108,8 +108,10 @@ class ProviderCaller:
             "provider": self.provider,
             "model": self.model,
             "real_model_inference": True,
-            "temperature": PAPER_TEMPERATURE,
-            "top_p": PAPER_TOP_P,
+            "temperature_requested": PAPER_TEMPERATURE,
+            "temperature_applied": self._client.temperature,
+            "top_p_requested": PAPER_TOP_P,
+            "top_p_applied": self._client.top_p,
             "seed": self._seed,
             "message_roles": ["user"],
             "output_characters": len(content),
@@ -203,6 +205,7 @@ def build_goal_prompt(
         for entity_type, values in sorted(object_groups.items())
     )
     facts = "\n".join(f"- {fact}" for fact in scenario.initial_state)
+    required_goals = "\n".join(f"- {goal}" for goal in scenario.goal_state)
     examples = _goal_examples(scenario, schemas, entities)
     return "\n".join(
         [
@@ -224,9 +227,13 @@ def build_goal_prompt(
             "Scene information:",
             facts,
             "",
+            "Required final conditions for the common evaluation protocol:",
+            required_goals,
+            "",
             "Examples:",
             examples,
             "",
+            "The formula must represent every required final condition listed above exactly once. ",
             "Use every relevant part of the instruction. Only use listed identifiers and the exact ",
             "underscore-separated Condition_Object syntax. Do not include reasoning or commentary.",
             "RESPONSE FORMAT:",
@@ -717,6 +724,7 @@ def _finish_run(
             ],
             "output_adaptations": [
                 "the authors' single-YuMi reactive policy is partitioned by declared common robot ownership",
+                "reactive backchaining is materialized in state-aware causal order so repeated nonmonotonic deployment and stow phases remain executable",
                 "cross-robot dependencies and exclusive zones use explicit common WaitFor and resource leaves",
                 "native PyTrees/list syntax is archived beside the canonical representation",
                 "the post-failure common artifact is the continuation policy planned from the unchanged snapshot",

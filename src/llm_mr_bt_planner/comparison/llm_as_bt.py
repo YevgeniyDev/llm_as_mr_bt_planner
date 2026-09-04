@@ -490,7 +490,8 @@ def run_llm_as_bt_planner(
             ],
             "output_adaptations": [
                 "selector maps to canonical Fallback and memoryless sequence maps to ReactiveSequence",
-                "cross-robot KIOS preconditions map to bounded WaitFor leaves to retain sequential subgoal dependencies",
+                "cross-robot KIOS preconditions map to bounded WaitFor leaves with versioned producer tracking",
+                "redundant waits are suppressed and repeated phased handshakes are ordered by causal production version",
                 "declared resource acquisition/release wraps the same generated low-level action",
                 "globally unique trace and task ids are assigned during observation",
             ],

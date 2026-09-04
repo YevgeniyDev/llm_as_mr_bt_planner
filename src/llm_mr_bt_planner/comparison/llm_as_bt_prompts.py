@@ -192,6 +192,9 @@ def _robot_domain(scenario: Scenario, robot_id: str) -> dict[str, Any]:
     return {
         "robot": robot_id,
         "actions": actions,
+        "allowed_action_names": [
+            capability.name for capability in robot.capabilities
+        ] if robot is not None else [],
         "constants": sorted(scenario.constants),
     }
 
@@ -215,8 +218,14 @@ def _kios_contract() -> dict[str, Any]:
             ],
         },
         "rules": [
+            "every node object has exactly summary and name; only composite nodes also have children",
+            "encode target, precondition, condition, and action only as the prefix of the name string",
+            "never use target, precondition, condition, action, type, or parameters as JSON keys",
             "selector and sequence use memoryless KIOS semantics",
             "use only exact declared grounded predicates, actions, robot ids, and constants",
+            "an action leaf must begin 'action: ' followed by one exact signature from robot_domain.actions",
+            "the first identifier after 'action: ' must be in robot_domain.allowed_action_names",
+            "the words capability, action_name, and exact_declared_action_name are schema placeholders, never action names",
             "every composite has a non-empty children array; leaves have no children",
             "do not output canonical BT node types or resource lock nodes",
         ],

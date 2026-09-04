@@ -55,8 +55,11 @@ class OpenAIClient:
         self.seed = seed
         self._json_mode = json_mode
         self._max_tokens = max_tokens
-        self._frequency_penalty = frequency_penalty
-        self._top_p = top_p
+        modern_default_sampling = _requires_default_temperature(self.model)
+        self._frequency_penalty = None if modern_default_sampling else frequency_penalty
+        self._top_p = None if modern_default_sampling else top_p
+        self.frequency_penalty = self._frequency_penalty
+        self.top_p = self._top_p
         self.response_metadata: list[dict[str, Any]] = []
 
     def set_seed(self, seed: int | None) -> None:
@@ -71,7 +74,7 @@ class OpenAIClient:
             ],
         )
         content = result["choices"][0]["message"].get("content")
-        if not isinstance(content, str):
+        if not isinstance(content, str) or not content.strip():
             raise LLMError("OpenAI response did not contain text content.")
         return content
 
@@ -110,7 +113,10 @@ class OpenAIClient:
         if self.seed is not None:
             payload["seed"] = self.seed
         if self._max_tokens is not None:
-            payload["max_tokens"] = self._max_tokens
+            token_limit_field = (
+                "max_completion_tokens" if _requires_default_temperature(self.model) else "max_tokens"
+            )
+            payload[token_limit_field] = self._max_tokens
         if self._frequency_penalty is not None:
             payload["frequency_penalty"] = self._frequency_penalty
         if self._top_p is not None:

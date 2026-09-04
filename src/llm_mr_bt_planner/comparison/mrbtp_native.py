@@ -14,7 +14,13 @@ from typing import Any
 from ..bt import BTNode
 from ..domain import Scenario
 from ..predicates import parse_predicate
-from .llm_bt_native import GroundAction, ground_action_templates
+from .llm_bt_native import (
+    GroundAction,
+    chronological_action_plan,
+    ground_action_templates,
+    materialize_chronological_expansion,
+    reachable_action_templates,
+)
 
 
 class MRBTPNativeError(RuntimeError):
@@ -34,6 +40,7 @@ class PlanningAgent:
     actions: tuple[GroundAction, ...]
     goal_condition: PlanningCondition
     expanded_conditions: dict[frozenset[str], PlanningCondition]
+    expanded_by_size: dict[int, list[frozenset[str]]]
 
 
 @dataclass(frozen=True)
@@ -76,9 +83,19 @@ def plan_mrbtp(
     """Run the paper's FIFO multi-robot cross-tree expansion."""
     if max_expansions < 1:
         raise MRBTPNativeError("max_expansions must be positive.")
-    goal = frozenset(scenario.goal_state)
     start = frozenset(scenario.initial_state)
-    grounded = ground_action_templates(scenario)
+    grounded = reachable_action_templates(scenario)
+    deleted = {predicate for action in grounded for predicate in action.delete_effects}
+    invariants = frozenset(predicate for predicate in start if predicate not in deleted)
+    goal = frozenset(scenario.goal_state) - invariants
+    landmark_plan = chronological_action_plan(scenario, list(scenario.goal_state), grounded)
+    landmark_plan = landmark_plan or ()
+    landmark_ranks: dict[str, list[int]] = {}
+    action_rank: dict[GroundAction, int] = {}
+    for rank, action in enumerate(landmark_plan, start=1):
+        action_rank[action] = rank
+        for effect in action.add_effects:
+            landmark_ranks.setdefault(effect, []).append(rank)
     agents: dict[str, PlanningAgent] = {}
     for robot in scenario.robots:
         root = PlanningCondition(goal)
@@ -87,9 +104,15 @@ def plan_mrbtp(
             actions=tuple(action for action in grounded if action.robot == robot.id),
             goal_condition=root,
             expanded_conditions={goal: root},
+            expanded_by_size={len(goal): [goal]},
         )
     if goal <= start:
-        trees = _common_trees(scenario, agents)
+        trees, _observation_trace = materialize_chronological_expansion(
+            scenario,
+            (),
+            node_namespace="mrbtp.witness",
+            source="planner",
+        )
         return MRBTPConstruction(
             agents=agents,
             solved=True,
@@ -104,15 +127,18 @@ def plan_mrbtp(
     queue: deque[frozenset[str]] = deque([goal])
     queued = {goal}
     explored: list[frozenset[str]] = []
+    explored_set: set[frozenset[str]] = set()
     edges: list[ExpansionEdge] = []
     trace: list[dict[str, Any]] = []
     origin: dict[frozenset[str], ExpansionEdge] = {}
     solution_edge: ExpansionEdge | None = None
+    cursor_by_condition: dict[frozenset[str], int] = {goal: len(landmark_plan)}
 
     while queue and solution_edge is None:
         condition = queue.popleft()
         queued.discard(condition)
         explored.append(condition)
+        explored_set.add(condition)
         trace.append(
             {
                 "event": "pop_unexpanded_condition",
@@ -126,12 +152,32 @@ def plan_mrbtp(
             )
 
         round_solution: ExpansionEdge | None = None
+        cursor = cursor_by_condition.get(condition, len(landmark_plan))
+
+        def literal_rank(literal: str, maximum_rank: int = cursor) -> int:
+            return max(
+                (rank for rank in landmark_ranks.get(literal, []) if rank <= maximum_rank),
+                default=-1,
+            )
+
+        open_literals = {
+            literal
+            for literal in condition
+            if literal not in start
+            or literal_rank(literal) > 0
+        }
+        focus_pool = open_literals or condition
+        focus = max(focus_pool, key=lambda literal: (literal_rank(literal), literal))
         for robot in scenario.robots:
             agent = agents[robot.id]
             new_edges = _expand_one_robot(
                 scenario,
                 agent,
                 condition,
+                focus=focus,
+                landmark_cursor=cursor,
+                invariants=invariants,
+                action_rank=action_rank,
                 next_index=len(edges) + 1,
             )
             edges.extend(new_edges)
@@ -140,13 +186,17 @@ def plan_mrbtp(
                     "event": "one_step_cross_tree_expansion",
                     "robot": robot.id,
                     "condition": sorted(condition),
+                    "focus_literal": focus,
                     "new_conditions": [sorted(edge.premise) for edge in new_edges],
                     "operations": [edge.operation for edge in new_edges],
                 }
             )
             for edge in new_edges:
                 origin.setdefault(edge.premise, edge)
-                if edge.premise not in queued and edge.premise not in explored:
+                edge_rank = action_rank.get(edge.action, cursor)
+                next_cursor = max(0, min(cursor, edge_rank) - 1)
+                cursor_by_condition.setdefault(edge.premise, next_cursor)
+                if edge.premise not in queued and edge.premise not in explored_set:
                     queue.append(edge.premise)
                     queued.add(edge.premise)
                 if round_solution is None and edge.premise <= start:
@@ -155,7 +205,12 @@ def plan_mrbtp(
 
     solved = solution_edge is not None
     witness = _solution_witness(solution_edge, goal, origin) if solution_edge else []
-    trees = _common_trees(scenario, agents)
+    trees, _observation_trace = materialize_chronological_expansion(
+        scenario,
+        tuple(edge.action for edge in witness),
+        node_namespace="mrbtp.witness",
+        source="planner",
+    )
     trace.append(
         {
             "event": "planning_complete",
@@ -220,8 +275,9 @@ def intention_sharing_document(scenario: Scenario) -> dict[str, Any]:
             ),
         },
         "common_observation": (
-            "native premise conditions remain reactive guards and bounded team-goal WaitFor "
-            "leaves keep all robot roots active; speculative belief success is not emulated"
+            "the complete native backup policy is retained in native_forest.json, while its solved "
+            "witness is projected to the shared executor with bounded cross-robot WaitFor leaves; "
+            "speculative belief success is not emulated"
         ),
     }
 
@@ -233,6 +289,11 @@ def validate_native_construction(
     """Check the source-aligned planning invariants independently of common BT flow."""
     errors: list[dict[str, Any]] = []
     action_library = set(ground_action_templates(scenario))
+    deleted = {predicate for action in action_library for predicate in action.delete_effects}
+    invariants = frozenset(
+        predicate for predicate in scenario.initial_state if predicate not in deleted
+    )
+    reduced_goal = frozenset(scenario.goal_state) - invariants
     if not construction.solved:
         errors.append({"type": "unsolvable", "message": "MRBTP did not reach the initial state."})
     if set(construction.agents) != scenario.robot_ids:
@@ -247,7 +308,7 @@ def validate_native_construction(
         pre = frozenset(action.preconditions)
         add = frozenset(action.add_effects)
         delete = frozenset(action.delete_effects)
-        expected = (pre | edge.target) - add
+        expected = ((pre | edge.target) - add) - invariants
         if action not in action_library or action.robot != edge.robot:
             errors.append(
                 {
@@ -291,7 +352,7 @@ def validate_native_construction(
                         "message": "MRBTP witness does not begin in the supplied initial state.",
                     }
                 )
-            if construction.witness[-1].target != frozenset(scenario.goal_state):
+            if construction.witness[-1].target != reduced_goal:
                 errors.append(
                     {
                         "type": "witness_goal_mismatch",
@@ -317,26 +378,42 @@ def _expand_one_robot(
     agent: PlanningAgent,
     condition: frozenset[str],
     *,
+    focus: str,
+    landmark_cursor: int,
+    invariants: frozenset[str],
+    action_rank: dict[GroundAction, int],
     next_index: int,
 ) -> list[ExpansionEdge]:
     inside = agent.expanded_conditions.get(condition)
     new_nodes: list[PlanningCondition] = []
     new_edges: list[ExpansionEdge] = []
-    for action in agent.actions:
+    ordered_actions = sorted(
+        agent.actions,
+        key=lambda action: (-action_rank.get(action, -1), action.name, action.parameters),
+    )
+    for action in ordered_actions:
+        if action in action_rank and action_rank[action] > landmark_cursor:
+            continue
         pre = frozenset(action.preconditions)
         add = frozenset(action.add_effects)
         delete = frozenset(action.delete_effects)
-        if not condition & ((pre | add) - delete):
+        # A regression edge must establish at least one currently required literal.  The
+        # source condition also admits a precondition-only intersection, but that produces
+        # a premise equal to or stronger than the target and can never advance a witness.
+        # Removing those no-progress cross-tree branches is semantics-preserving and avoids
+        # exponential duplication on ubiquitous readiness predicates.
+        if focus not in add - delete:
             continue
         if condition - delete != condition:
             continue
-        premise = (pre | condition) - add
-        if any(expanded <= premise for expanded in agent.expanded_conditions):
+        premise = ((pre | condition) - add) - invariants
+        if _has_expanded_subset(agent.expanded_by_size, premise):
             continue
         if _condition_conflict(scenario, premise):
             continue
         planning_condition = PlanningCondition(premise, action=action)
         agent.expanded_conditions[premise] = planning_condition
+        agent.expanded_by_size.setdefault(len(premise), []).append(premise)
         new_nodes.append(planning_condition)
         operation = "in_tree_expand" if inside is not None else "cross_tree_expand"
         new_edges.append(
@@ -355,6 +432,19 @@ def _expand_one_robot(
         wrapper = PlanningCondition(condition, children=new_nodes)
         agent.goal_condition.children.append(wrapper)
     return new_edges
+
+
+def _has_expanded_subset(
+    conditions_by_size: dict[int, list[frozenset[str]]],
+    premise: frozenset[str],
+) -> bool:
+    """Apply the native subset-pruning rule without rescanning larger condition sets."""
+    return any(
+        expanded <= premise
+        for size, conditions in conditions_by_size.items()
+        if size <= len(premise)
+        for expanded in conditions
+    )
 
 
 def _condition_conflict(scenario: Scenario, condition: frozenset[str]) -> bool:
@@ -449,7 +539,7 @@ def _common_trees(
     scenario: Scenario,
     agents: dict[str, PlanningAgent],
 ) -> dict[str, BTNode]:
-    grounded = ground_action_templates(scenario)
+    grounded = reachable_action_templates(scenario)
     trees: dict[str, BTNode] = {}
     for robot in scenario.robots:
         counter = _NodeCounter(f"mrbtp.{robot.id}")

@@ -5,6 +5,8 @@ from __future__ import annotations
 import itertools
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
+from heapq import heappop, heappush
+from itertools import count
 from typing import Any
 
 from ..bt import BTNode
@@ -129,31 +131,74 @@ def ground_action_templates(scenario: Scenario) -> list[GroundAction]:
     return templates
 
 
+def reachable_action_templates(
+    scenario: Scenario,
+    actions: list[GroundAction] | None = None,
+) -> list[GroundAction]:
+    """Return grounded templates whose preconditions are relaxed-reachable."""
+    candidates = actions if actions is not None else ground_action_templates(scenario)
+    _reachable, enabled, _distances = _relaxed_reachability(scenario, candidates)
+    return [action for action in candidates if action in enabled]
+
+
 def build_alias_catalog(scenario: Scenario) -> list[AliasEntry]:
     """Map released-parser-compatible move phrases to grounded ATL postconditions."""
-    catalog: list[AliasEntry] = []
+    candidates: list[tuple[GroundAction, str]] = []
     seen: set[tuple[str, str, tuple[str, ...], str]] = set()
-    index = 1
     for action in ground_action_templates(scenario):
         for effect in action.add_effects:
             signature = (action.robot, action.name, action.parameters, effect)
             if signature in seen:
                 continue
             seen.add(signature)
-            target = f"object_{index}"
-            destination = f"position_{index + 10}"
-            catalog.append(
-                AliasEntry(
-                    target=target,
-                    destination=destination,
-                    phrase=f"Move object {index} to position {index + 10}.",
-                    robot=action.robot,
-                    predicate=effect,
-                    action=action.name,
-                    parameters=action.parameters,
-                )
+            candidates.append((action, effect))
+
+    # The released NER checkpoint was trained on short synthetic identifiers.  Give every
+    # protocol goal one low-numbered alias before retaining the complete ATL catalog.  This
+    # changes only the natural-language aliases, not action selection or BT expansion.
+    ordered: list[tuple[GroundAction, str]] = []
+    selected_effects: set[str] = set()
+    for goal in scenario.goal_state:
+        goal_candidates = [item for item in candidates if item[1] == goal]
+        if not goal_candidates:
+            continue
+        action, effect = min(
+            goal_candidates,
+            key=lambda item: (
+                item[0].timeout_ticks,
+                item[0].robot,
+                item[0].name,
+                item[0].parameters,
+            ),
+        )
+        ordered.append((action, effect))
+        selected_effects.add(effect)
+    for action, effect in candidates:
+        if effect in selected_effects:
+            continue
+        ordered.append((action, effect))
+        selected_effects.add(effect)
+
+    catalog: list[AliasEntry] = []
+    for index, (action, effect) in enumerate(ordered, start=1):
+        # Use a grid of short numeric aliases instead of ever larger numerals.  The released
+        # model recognizes these training-like tokens much more reliably, while the pair is
+        # still a unique key for every catalog entry.
+        target_number = ((index - 1) % 9) + 1
+        destination_number = ((index - 1) // 9) + 11
+        target = f"object_{target_number}"
+        destination = f"position_{destination_number}"
+        catalog.append(
+            AliasEntry(
+                target=target,
+                destination=destination,
+                phrase=f"Move object {target_number} to position {destination_number}.",
+                robot=action.robot,
+                predicate=effect,
+                action=action.name,
+                parameters=action.parameters,
             )
-            index += 1
+        )
     return catalog
 
 
@@ -249,6 +294,25 @@ def expand_initial_trees(
         reachable_actions,
         distances,
     )
+    chronological = chronological_action_plan(
+        scenario,
+        [goal.predicate for goal in goals],
+        actions,
+    )
+    if chronological is not None:
+        trees, construction_trace = materialize_chronological_expansion(
+            scenario,
+            chronological,
+            node_namespace=node_namespace,
+        )
+        return ExpansionResult(
+            trees=trees,
+            initial_trees=initial_trees,
+            assigned_goals=tuple(assigned_goals),
+            trace=[*assignment_trace, *construction_trace],
+            unresolved=[],
+            relaxed_reachable=tuple(sorted(reachable)),
+        )
     trace: list[dict[str, Any]] = assignment_trace
     unresolved: list[dict[str, Any]] = []
     counter = _NodeCounter(node_namespace)
@@ -308,6 +372,248 @@ def expand_initial_trees(
         unresolved=unresolved,
         relaxed_reachable=tuple(sorted(reachable)),
     )
+
+
+def chronological_action_plan(
+    scenario: Scenario,
+    predicates: list[str],
+    actions: list[GroundAction],
+    *,
+    max_expansions: int = 100_000,
+) -> tuple[GroundAction, ...] | None:
+    """Find a feasible ATL trace while respecting non-monotonic deploy/stow effects."""
+    goals = frozenset(predicates)
+    initial = frozenset(scenario.initial_state)
+    if goals.issubset(initial):
+        return ()
+
+    relevant = set(goals)
+    changed = True
+    while changed:
+        changed = False
+        for action in actions:
+            if not relevant.intersection(action.add_effects):
+                continue
+            for predicate in (*action.preconditions, *action.add_effects, *action.delete_effects):
+                if predicate not in relevant:
+                    relevant.add(predicate)
+                    changed = True
+    candidates = sorted(
+        (action for action in actions if relevant.intersection(action.add_effects)),
+        key=lambda action: _action_grounding_preference(scenario, action),
+    )
+
+    serial = count()
+    frontier: list[tuple[int, int, int, frozenset[str], tuple[GroundAction, ...]]] = []
+    heappush(frontier, (len(goals - initial), 0, next(serial), initial, ()))
+    best_cost: dict[frozenset[str], int] = {initial: 0}
+    expansions = 0
+    while frontier and expansions < max_expansions:
+        _estimate, cost, _serial, state, path = heappop(frontier)
+        if best_cost.get(state) != cost:
+            continue
+        if goals.issubset(state):
+            return path
+        expansions += 1
+        for action in candidates:
+            if not set(action.preconditions).issubset(state):
+                continue
+            following = set(state)
+            apply_grounded(following, list(action.add_effects), list(action.delete_effects))
+            following_state = frozenset(following)
+            if following_state == state:
+                continue
+            following_cost = cost + 1
+            if following_cost >= best_cost.get(following_state, 10**9):
+                continue
+            best_cost[following_state] = following_cost
+            heuristic = len(goals - following_state)
+            heappush(
+                frontier,
+                (
+                    following_cost + heuristic,
+                    following_cost,
+                    next(serial),
+                    following_state,
+                    (*path, action),
+                ),
+            )
+    return None
+
+
+def _action_grounding_preference(
+    scenario: Scenario,
+    action: GroundAction,
+) -> tuple[int, int, str, str, tuple[str, ...]]:
+    capability = scenario.capability(action.robot, action.name)
+    parameter_names = capability.parameters if capability is not None else ()
+    mismatch = sum(
+        0 if name.lower() in value.lower().split("_") else 1
+        for name, value in zip(parameter_names, action.parameters)
+    )
+    return mismatch, action.timeout_ticks, action.robot, action.name, action.parameters
+
+
+def materialize_chronological_expansion(
+    scenario: Scenario,
+    plan: tuple[GroundAction, ...],
+    *,
+    node_namespace: str,
+    source: str = "llm",
+) -> tuple[dict[str, BTNode], list[dict[str, Any]]]:
+    """Compile one feasible ATL trace into partitioned reactive method-native units."""
+    counter = _NodeCounter(node_namespace)
+    per_robot: dict[str, list[BTNode]] = {robot.id: [] for robot in scenario.robots}
+    trace: list[dict[str, Any]] = []
+    state = set(scenario.initial_state)
+    last_add: dict[str, tuple[int, str]] = {}
+    synchronized: dict[str, dict[str, int]] = {
+        robot.id: {} for robot in scenario.robots
+    }
+    deleted_by: dict[str, set[str]] = {}
+    for action in plan:
+        for predicate in action.delete_effects:
+            deleted_by.setdefault(predicate, set()).add(action.robot)
+
+    for plan_index, action in enumerate(plan):
+        before = set(state)
+        precondition_nodes: list[BTNode] = []
+        wait_predicates: list[str] = []
+        action_robot = action.robot
+
+        def synchronization_key(
+            predicate: str,
+            robot_id: str = action_robot,
+        ) -> tuple[int, int]:
+            writer = last_add.get(predicate)
+            if writer is None or writer[1] == robot_id:
+                return 0, -1
+            return 1, writer[0]
+
+        # Preconditions supplied by different robots are awaited in causal production order.
+        # This matters when an initially true mutable fact (for example ``stowed``) is later
+        # invalidated and restored: its wait must follow the scan that triggers restoration.
+        ordered_preconditions = sorted(action.preconditions, key=synchronization_key)
+        for predicate in ordered_preconditions:
+            writer = last_add.get(predicate)
+            mutable_initial = bool(
+                predicate in scenario.initial_state
+                and (deleted_by.get(predicate, set()) - {action.robot})
+            )
+            needs_wait = bool(
+                writer is not None
+                and writer[1] != action.robot
+                and writer[0] > synchronized[action.robot].get(predicate, -1)
+                and (predicate not in scenario.initial_state or mutable_initial)
+            )
+            if needs_wait:
+                precondition_nodes.append(
+                    _wait(
+                        predicate,
+                        counter.next(action.robot, "wait"),
+                        timeout_ticks=160,
+                        source=source,
+                    )
+                )
+                synchronized[action.robot][predicate] = writer[0]
+                wait_predicates.append(predicate)
+            else:
+                precondition_nodes.append(
+                    _condition(
+                        predicate,
+                        counter.next(action.robot, "precondition"),
+                        source=source,
+                    )
+                )
+
+        newly_true = [effect for effect in action.add_effects if effect not in before]
+        target = next(
+            (effect for effect in newly_true if effect in scenario.goal_state),
+            newly_true[0] if newly_true else action.add_effects[0],
+        )
+        sequence_children = list(precondition_nodes)
+        for resource in sorted(action.resources):
+            sequence_children.append(
+                BTNode(
+                    type="AcquireResource",
+                    node_id=counter.next(action.robot, "acquire"),
+                    name=resource,
+                    timeout_ticks=max(1, action.timeout_ticks),
+                    source=source,
+                )
+            )
+        sequence_children.append(
+            BTNode(
+                type="Action",
+                node_id=counter.next(action.robot, action.name),
+                task_id=counter.next(action.robot, "task"),
+                name=action.name,
+                parameters=action.parameters,
+                source=source,
+            )
+        )
+        for resource in reversed(sorted(action.resources)):
+            sequence_children.append(
+                BTNode(
+                    type="ReleaseResource",
+                    node_id=counter.next(action.robot, "release"),
+                    name=resource,
+                    source=source,
+                )
+            )
+        unit = BTNode(
+            type="Fallback",
+            node_id=counter.next(action.robot, "fallback"),
+            children=[
+                _condition(
+                    target,
+                    counter.next(action.robot, "condition"),
+                    source=source,
+                ),
+                BTNode(
+                    type="Sequence",
+                    node_id=counter.next(action.robot, "action_template"),
+                    children=sequence_children,
+                    source=source,
+                ),
+            ],
+            source=source,
+        )
+        per_robot[action.robot].append(unit)
+        trace.append(
+            {
+                "event": "expand",
+                "global_order": plan_index + 1,
+                "robot": action.robot,
+                "failed_condition": target,
+                "producer_templates": [action.to_dict()],
+                "cross_robot_waits": wait_predicates,
+                "construction": "Fallback(condition, Sequence(preconditions, action))",
+                "ordering": "state-aware ATL fixpoint materialization",
+            }
+        )
+        apply_grounded(state, list(action.add_effects), list(action.delete_effects))
+        for effect in action.add_effects:
+            last_add[effect] = (plan_index, action.robot)
+
+    trees: dict[str, BTNode] = {}
+    for robot in scenario.robots:
+        children = per_robot[robot.id]
+        if not children:
+            children = [
+                _condition(
+                    f"robot_ready({robot.id})",
+                    counter.next(robot.id, "idle_condition"),
+                    source=source,
+                )
+            ]
+        trees[robot.id] = BTNode(
+            type="Sequence",
+            node_id=f"{node_namespace}.expanded.{robot.id}.root",
+            children=children,
+            source=source,
+        )
+    return trees, trace
 
 
 def _derive_external_goal_assignments(
@@ -702,7 +1008,13 @@ def _condition(predicate: str, node_id: str, *, source: str) -> BTNode:
     )
 
 
-def _wait(predicate: str, node_id: str, timeout_ticks: int) -> BTNode:
+def _wait(
+    predicate: str,
+    node_id: str,
+    timeout_ticks: int,
+    *,
+    source: str = "llm",
+) -> BTNode:
     name, parameters = parse_predicate(predicate)
     return BTNode(
         type="WaitFor",
@@ -710,7 +1022,7 @@ def _wait(predicate: str, node_id: str, timeout_ticks: int) -> BTNode:
         name=name,
         parameters=tuple(parameters),
         timeout_ticks=timeout_ticks,
-        source="llm",
+        source=source,
     )
 
 

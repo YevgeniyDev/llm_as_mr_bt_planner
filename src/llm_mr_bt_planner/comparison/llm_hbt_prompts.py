@@ -12,20 +12,29 @@ import json
 from typing import Any
 
 from ..domain import Scenario
-from .llm_bt_native import GroundAction
+from .llm_bt_native import GroundAction, ground_action_templates
 
 INITIALIZATION_SYSTEM_PROMPT = """You are the task-initialization module of LLM-HBT.
 Translate the human instruction into an ordered list of condition nodes selected only
 from the supplied condition-node library. Return one JSON object and no prose:
 {"conditions":["predicate(arguments)", ...]}
 The order must support executable progress and preserve required final conditions.
+Include every supplied required final condition exactly once. Do not include observed
+initial conditions or action preconditions that are already observed. You may include a
+non-initial intermediate postcondition once when it is needed to order a handoff.
+Order milestones forward: navigation/delivery, placement, stowing/resting, terminal
+installation or consumption, and finally restored empty-gripper conditions.
 Do not invent conditions, actions, robots, objects, or locations."""
 
 ALEX_SYSTEM_PROMPT = """You are Alex, the centralized virtual allocator in LLM-HBT.
 Given one failed condition, observations, and heterogeneous robot action libraries, assign
 exactly one capable robot. Return one JSON object and no prose:
 {"robot":"robot_id","mode":"local|delegated","task":"short assignment"}
+The selected robot must have a listed grounded action whose add effects directly contain
+the failed condition. Do not select a robot that can only establish a precondition.
 Use local only when the requesting robot can resolve the condition; otherwise delegate.
+If the requesting robot is "unassigned initial condition", use local for the selected robot.
+Use delegated only when a concrete requesting robot differs from the selected robot.
 Do not select an action in this stage and do not invent identifiers."""
 
 ROBOT_SYSTEM_PROMPT = """You are the selected robot's LLM-HBT action selector.
@@ -39,6 +48,7 @@ def build_initialization_prompt(
     scenario: Scenario,
     conditions: list[str],
 ) -> str:
+    actions = ground_action_templates(scenario)
     return "\n".join(
         [
             "Human instruction:",
@@ -47,10 +57,17 @@ def build_initialization_prompt(
             "Observed initial state:",
             _lines(scenario.initial_state),
             "",
+            "Required final conditions:",
+            _lines(scenario.goal_state),
+            "",
             "Pre-defined condition-node library:",
             _lines(conditions),
             "",
-            "Construct the initial ordered condition tree using only that library.",
+            "Grounded robot actions (use add/delete effects only to order condition milestones):",
+            _lines(_action_line(action) for action in actions),
+            "",
+            "Construct the initial ordered condition tree from required final conditions and only ",
+            "strictly necessary non-initial handoff postconditions. Include each selected condition once.",
         ]
     )
 

@@ -392,6 +392,49 @@ def test_gpt5_request_omits_unsupported_temperature(monkeypatch):
     ]
 
 
+def test_gpt5_request_uses_completion_token_limit(monkeypatch):
+    from llm_mr_bt_planner.llm import openai_client
+
+    requests: list[dict] = []
+
+    class _Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        @staticmethod
+        def read() -> bytes:
+            return json.dumps(
+                {
+                    "id": "chatcmpl_test",
+                    "model": "gpt-5.6-sol-2026-08-01",
+                    "choices": [{"message": {"content": "{}"}}],
+                }
+            ).encode()
+
+    def urlopen(request, timeout):  # noqa: ARG001
+        requests.append(json.loads(request.data))
+        return _Response()
+
+    monkeypatch.setattr(openai_client.urllib.request, "urlopen", urlopen)
+    client = OpenAIClient(
+        model="gpt-5.6-sol",
+        api_key="test-only",
+        max_tokens=1200,
+        top_p=0.1,
+        frequency_penalty=0.2,
+    )
+
+    assert client.complete("system", "user") == "{}"
+    assert requests[0]["max_completion_tokens"] == 1200
+    assert "max_tokens" not in requests[0]
+    assert "top_p" not in requests[0]
+    assert "frequency_penalty" not in requests[0]
+    assert client.top_p is None
+
+
 def test_openai_http_error_extracts_readable_message(monkeypatch):
     from llm_mr_bt_planner.llm import openai_client
 

@@ -40,9 +40,11 @@ PAPER_CHATGPT_MODEL = "not reported"
 DEFAULT_REPRODUCTION_MODEL = "gpt-3.5-turbo"
 REASONING_SYSTEM_PROMPT = (
     "You are the reasoning module of a robot task system. Convert the instruction and "
-    "semantic map into concise descriptive steps. Return only numbered sentences copied "
-    "exactly from the supplied move-phrase catalog. Do not add explanations, headings, "
-    "conditions, XML, or phrases outside that catalog."
+    "semantic map into concise descriptive steps. Return exactly one numbered sentence for "
+    "each required final condition, copied exactly from the supplied move-phrase catalog. "
+    "Choose only a phrase whose postcondition is that final condition; do not select "
+    "intermediate effects or multiple producer aliases for the same condition. Do not add "
+    "explanations, headings, conditions, XML, or phrases outside that catalog."
 )
 _SAFE_ID = re.compile(r"[^A-Za-z0-9_.-]+")
 
@@ -91,7 +93,7 @@ class ProviderReasoner:
             temperature=0.0,
             seed=self._seed,
             json_mode=False,
-            max_tokens=1200,
+            max_tokens=4000,
         )
         text = client.complete(system, user)
         metadata: dict[str, Any] = {
@@ -194,7 +196,8 @@ def build_reasoning_prompt(
             "Released-parser-compatible move-phrase catalog:",
             entries,
             "",
-            "Select catalog phrases whose postconditions express every required final condition. ",
+            f"Return exactly {len(scenario.goal_state)} phrases: one for each required final condition, ",
+            "with no intermediate-effect phrases and no duplicate postconditions. ",
             "Order them so that a condition which may be consumed is restored after the consuming step. ",
             "The BT Update module, not you, will select actions needed to establish those conditions.",
         ]
@@ -510,11 +513,13 @@ def _finish_run(
             ],
             "input_adaptations": [
                 "symbolic common state is serialized as the paper's XML semantic-map medium",
-                "common grounded postconditions receive move/object/position aliases compatible with the released parser",
+                "protocol goals receive first-choice move/object/position aliases on a compact numeric grid compatible with the released parser",
+                "remaining unique grounded postconditions receive secondary parser-compatible aliases",
                 "common capability contracts instantiate the manually supplied Action Template Library",
+                "numbered LLM instructions are classified independently to prevent cross-instruction BIO-label bleed",
             ],
             "output_adaptations": [
-                "native tick-wise failed-node updates are materialized to an ATL fixpoint before common static validation",
+                "native tick-wise failed-node updates are materialized as a state-aware causal ATL fixpoint before common static validation",
                 "single-robot ATL dependencies are assigned to the declared common-domain robot owner",
                 "an external producer dependency becomes an explicit bounded consumer WaitFor",
                 "resource acquire/release leaves wrap resource-bearing common capability templates",

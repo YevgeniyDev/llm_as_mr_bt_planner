@@ -1,12 +1,39 @@
 # Multi-Robot Behavior Tree Planner
 
-This application uses OpenAI or Anthropic (Claude) to generate complete synchronized Behavior Trees for a heterogeneous three-robot team. It validates and symbolically simulates the model's exact trees, saves successful results as JSON and XML, and can execute three bundled missions in a separate MuJoCo process.
+This application uses OpenAI or Anthropic (Claude) to generate complete synchronized Behavior Trees for heterogeneous robot teams. It validates and symbolically simulates the model's exact trees, saves successful results as JSON and XML, and can execute the bundled three-robot and five-agent missions in a separate MuJoCo process.
 
 The demonstration team is:
 
 - `franka_a` — Franka Emika Panda at the source station
 - `unitree_go2_z1` — Unitree Go2 with a Z1 arm, transporting the part
 - `franka_b` — Franka Emika Panda at the destination station
+
+The five-agent inspection missions additionally model B2 locomotion, its mounted Z1 thermal
+arm, a Husky base, the Franka mounted on Husky, and a static Franka.
+
+## Overview
+
+Use these links to jump directly to the part of the README you need:
+
+- **Get started:** [install](#install), [start the UI](#start-the-user-interface), or
+  [generate a Behavior Tree](#generate-a-behavior-tree).
+- **Understand the data flow:** [input files](#input-files),
+  [pipeline behavior](#what-the-pipeline-does), and [output files](#output-files).
+- **Use the CLI:** [command-line use](#command-line-use) and
+  [validate or simulate an exported BT](#verify-a-downloaded-behavior-tree).
+- **Run MuJoCo:** [simulator setup](#run-the-bundled-scenarios-in-mujoco),
+  [five-agent inspection](#generate-and-run-the-five-agent-inspection-mission),
+  [online dropped-tool recovery](#run-five-agent-inspection-with-online-dropped-tool-recovery),
+  [pipe-leak repair](#generate-and-run-the-pipe-only-leak-repair-mission), and
+  [video recording](#record-publication-quality-simulation-videos).
+- **Run paper experiments:** [unexpected-failure recovery](#run-and-record-the-unexpected-failure-recovery-experiment)
+  and [the five comparison baselines](#paper-comparison-baselines):
+  [LLM-as-BT-Planner](#llm-as-bt-planner-comparison),
+  [LLM-BT](#llm-bt-comparison), [BETR-XP-LLM](#betr-xp-llm-comparison),
+  [LLM-HBT](#llm-hbt-comparison), and [MRBTP](#mrbtp-comparison).
+- **Reference:** [saved projects](#saved-projects),
+  [verification boundaries](#what-is-and-is-not-verified), and
+  [development checks](#development-checks).
 
 ## Install
 
@@ -67,7 +94,7 @@ A scenario describes:
 
 - the mission instruction;
 - typed entities and shared resources;
-- exactly three robots;
+- the participating robots/controllers (three in the original missions and five in the inspection missions);
 - each robot's capabilities, parameters, preconditions, effects, duration, and timeout;
 - the initial symbolic state;
 - the required goal state.
@@ -422,7 +449,13 @@ On a displayless Linux host, select an off-screen OpenGL backend before importin
 
 The command statically validates the BT first, composes one MuJoCo world, settles all three robots, and then ticks the exact hierarchical trees concurrently. It prints condition/action/resource progress and writes `physical_execution_report.json` under `outputs/mujoco/`. An unrecovered failure returns a nonzero exit code and identifies the robot, node, failed measured predicate, controller stage, or timeout; recovered Action failures remain visible in the successful report.
 
-The adapter deliberately supports only `three_robot_courier`, `three_robot_packaging_delivery`, and `three_robot_component_installation`; it rejects any other task rather than silently mapping it to a known scene. It executes `Sequence` and `Fallback` control flow hierarchically. A generated tree that uses an unsupported physical composite or action can still pass symbolic checks, but MuJoCo rejects it with the exact unsupported node instead of flattening or rewriting it.
+The adapter supports only its explicitly registered scenarios: `three_robot_courier`,
+`three_robot_packaging_delivery`, `three_robot_component_installation`,
+`five_agent_solar_pipe_inspection`, and `five_agent_pipe_leak_repair`. It rejects any other
+task rather than silently mapping it to a known scene. It executes `Sequence` and `Fallback`
+control flow hierarchically. A generated tree that uses an unsupported physical composite or
+action can still pass symbolic checks, but MuJoCo rejects it with the exact unsupported node
+instead of flattening or rewriting it.
 
 All three scenes contain two independently prefixed 7-DoF Panda models and one Go2 with the Z1 gripper model mounted on its trunk. The courier and component-installation scenes use separated workbenches; component installation adds one free `primary_part` plus object-specific grasp and fixture constraints. The packing scene instead uses one shared assembly bench, opposed Panda mounting positions with collision-safe home poses, a separate room boundary and delivery pedestal, and a travel aisle through the doorway. Controller target sites are hidden and have no collision geometry. The recovery-only `source_floor` site is invisible and has no collision geometry; it represents the diagnosed landing region rather than another scene object.
 
@@ -447,6 +480,60 @@ Robot MJCF files are fetched from MuJoCo Menagerie at the pinned commit recorded
 Primary quantitative comparison is deliberately limited to five external methods: LLM-as-BT-Planner, LLM-BT, BETR-XP-LLM, LLM-HBT, and MRBTP. This keeps the table centered on LLM-generated BTs and runtime adaptation, with MRBTP retained as the one non-LLM planning reference. Broader approaches remain discussed in the paper's related-work review, but they are not implemented or reported as primary experimental baselines.
 
 Baseline implementations live behind `lmrbtp compare` and remain separate from the proposed planner. All five selected methods are implemented below with method-specific provenance, native artifacts, common-domain observations, and regression tests.
+
+### Quick start: five-agent comparison
+
+All five runners can use the same [solar/pipe inspection scenario](examples/five_agent_solar_pipe_inspection.json),
+capability contracts, validation gates, and symbolic executor. Their planning mechanisms remain distinct:
+
+| Method | How it produces the Behavior Trees |
+| --- | --- |
+| **LLM-as-BT-Planner** | An LLM decomposes the mission into sequential subgoals and directly emits KIOS-style BTs for them. |
+| **LLM-BT** | One LLM call produces descriptive steps, the released DistilBERT parser extracts goal phrases, and a deterministic Action Template Library expands the BT. |
+| **BETR-XP-LLM** | One LLM call formalizes the goal; symbolic reactive backchaining constructs fallback branches for unsatisfied conditions. |
+| **LLM-HBT** | Failed conditions enter a queue; an LLM coordinator assigns a robot and another LLM decision selects each producing action recursively. |
+| **MRBTP** | A non-LLM FIFO regression planner expands per-robot action spaces and records in-tree and cross-tree policy branches. |
+
+Install the project plus LLM-BT's released-parser dependencies, then prepare the pinned upstream
+sources once. Preparation downloads and verifies source/model artifacts; it does not run an
+experiment or call an LLM.
+
+```powershell
+python -m pip install -e ".[llm-bt,dev]"
+
+lmrbtp compare llm-as-bt-planner prepare --output outputs/comparison/llm-as-bt-planner/source
+lmrbtp compare llm-bt prepare            --output outputs/comparison/llm-bt/source
+lmrbtp compare betr-xp-llm prepare        --output outputs/comparison/betr-xp-llm/source
+lmrbtp compare llm-hbt prepare            --output outputs/comparison/llm-hbt/source
+lmrbtp compare mrbtp prepare              --output outputs/comparison/mrbtp/source
+```
+
+Run one nominal trial of every method in the common five-agent setting:
+
+```powershell
+$env:OPENAI_API_KEY = "your-key"
+$scenario = "examples/five_agent_solar_pipe_inspection.json"
+$model = "gpt-5.6-sol"
+$root = "outputs/comparison/five-robot"
+
+lmrbtp compare llm-as-bt-planner run --scenario $scenario --scheme one-step --provider openai --model $model --output "$root/llm-as-bt-planner" --seed 42 --max-ticks 500
+lmrbtp compare llm-bt run            --scenario $scenario --model $model --source outputs/comparison/llm-bt/source --output "$root/llm-bt" --seed 42 --max-ticks 500
+lmrbtp compare betr-xp-llm run        --scenario $scenario --model $model --source outputs/comparison/betr-xp-llm/source --output "$root/betr-xp-llm" --seed 42 --max-ticks 500
+lmrbtp compare llm-hbt run            --scenario $scenario --provider openai --model $model --source outputs/comparison/llm-hbt/source --output "$root/llm-hbt" --seed 42 --max-ticks 500
+lmrbtp compare mrbtp run              --scenario $scenario --source outputs/comparison/mrbtp/source --output "$root/mrbtp" --max-expansions 10000 --max-ticks 500
+```
+
+MRBTP needs no API key; the other four commands perform live model inference. Each command creates
+a timestamped directory containing native artifacts, `canonical_plan.json`, validation and
+simulation reports, `metrics.json`, and `manifest.json`. A successful run additionally publishes
+`accepted_plan.json`; a rejected run retains diagnostics but does not publish that file. The
+currently selected five-agent accepted plans can be collected under
+`outputs/comparison/five-robot/final-json/`, with `index.json` recording their hashes and metrics.
+Use at least 30 independent trials per stochastic configuration for paper results; a single
+accepted run is an integration result, not a success-rate estimate.
+
+The following subsections document provenance, paper-specific settings, adapters, replay inputs,
+and recovery behavior for each method.
 
 ### LLM-as-BT-Planner comparison
 
@@ -661,9 +748,20 @@ lmrbtp compare mrbtp run `
 
 No API key or model is used. The paper's optional LLM-generated composite-action plugin is deliberately disabled so MRBTP remains the non-LLM reference. `--max-expansions` bounds symbolic construction and `--max-ticks` bounds common execution.
 
-Each run archives the grounded per-robot action spaces, FIFO expansion trace, planning graph, native backup forest, reconstructed solution witness, intention-sharing protocol, canonical common forest, validation results, simulation trace, metrics, checksums, and exact source manifest. Common nodes use explicit `source: planner`; the validator accepts that provenance only through an opt-in reactive-policy profile, while ordinary generated plans remain LLM-only by default. Resource leaves and bounded team-goal waits expose the shared executor contract without adding, deleting, substituting, or reordering task actions.
+Each run archives the grounded per-robot action spaces, FIFO expansion trace, planning graph,
+native backup forest, reconstructed solution witness, intention-sharing protocol, canonical
+observation, validation results, simulation trace, metrics, checksums, and exact source
+manifest. The full backup policy remains in `native/native_forest.json`; its solved witness is
+projected to per-robot common BT JSON for deterministic execution. Common nodes use explicit
+`source: planner`, which the validator accepts only through the comparison runner's opt-in
+reactive-policy profile. Resource leaves and bounded cross-robot waits expose the shared
+executor contract without adding, deleting, substituting, or reordering task actions.
 
-This is an official-source-aligned common-domain port, not an unmodified run of the upstream MiniGrid or VirtualHome environment. The common executor uses actual-state premise guards and deterministic round-robin ticks rather than MRBTP's speculative belief-success semantics. Communication-loss, homogeneous-action failure, and the optional LLM subtree experiments remain outside this nominal comparison track.
+This is an official-source-aligned common-domain port, not an unmodified run of the upstream
+MiniGrid or VirtualHome environment. The witness projection uses deterministic round-robin
+ticks and does not emulate MRBTP's speculative belief-success semantics. Communication-loss,
+homogeneous-action failure, and the optional LLM subtree experiments remain outside this
+nominal comparison track.
 
 ## Saved projects
 

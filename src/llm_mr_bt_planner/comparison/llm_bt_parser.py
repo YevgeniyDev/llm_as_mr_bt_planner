@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
@@ -113,8 +114,12 @@ class TransformersKeywordParser:
         }
 
     def parse(self, text: str) -> ParserResult:
-        raw = self._pipeline(text)
-        predictions = [dict(item) for item in raw]
+        segments = _numbered_move_segments(text)
+        predictions = [
+            {key: _json_scalar(value) for key, value in dict(item).items()}
+            for segment in segments
+            for item in self._pipeline(segment)
+        ]
         moves = parse_predictions(predictions)
         return ParserResult(
             predictions=predictions,
@@ -123,11 +128,38 @@ class TransformersKeywordParser:
                 "mode": "released_distilbert_ner",
                 "real_model_inference": True,
                 "input_characters": len(text),
+                "input_segment_count": len(segments),
                 "prediction_count": len(predictions),
                 "device": self._device,
                 "library_versions": self._versions,
             },
         )
+
+
+def _numbered_move_segments(text: str) -> list[str]:
+    """Keep the released NER model inside one numbered instruction at a time.
+
+    The checkpoint can leak BIO state across adjacent numbered commands and
+    mislabel otherwise valid object identifiers. The original parser consumes
+    each predicted move independently, so segmenting only the classifier input
+    preserves its grammar and state machine while making batched LLM output
+    deterministic.
+    """
+    normalized = " ".join(text.split())
+    if not normalized:
+        return [text]
+    segments = [
+        part.strip()
+        for part in re.split(r"(?<=\.)\s+(?=\d+\.\s+Move\b)", normalized, flags=re.IGNORECASE)
+        if part.strip()
+    ]
+    return segments or [text]
+
+
+def _json_scalar(value: Any) -> Any:
+    """Convert NumPy/PyTorch scalar metadata emitted by Transformers."""
+    item = getattr(value, "item", None)
+    return item() if callable(item) else value
 
 
 def parse_predictions(predictions: list[dict[str, Any]]) -> list[ParsedMove]:

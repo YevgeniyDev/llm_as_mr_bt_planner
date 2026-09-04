@@ -17,7 +17,7 @@ from ..domain import Scenario, scenario_to_dict
 from ..plan import Plan, parse_plan
 from ..simulation import SimulationReport, simulate, skipped_simulation
 from ..validation import ValidationReport, validate_plan
-from .llm_bt_native import ground_action_templates
+from .llm_bt_native import reachable_action_templates
 from .mrbtp_native import (
     MRBTPConstruction,
     intention_sharing_document,
@@ -200,14 +200,16 @@ def run_mrbtp(
             ],
             "input_adaptations": [
                 "official PlanningAction pre/add/del sets are instantiated from grounded common capability contracts",
-                "the complete common goal state is supplied as the MRBTP goal condition",
+                "the complete common goal state is supplied before proven invariant initial facts are removed from regression conditions",
                 "common part-location, holding, gripper, and docking invariants provide conflict checks",
+                "relaxed reachability removes grounded actions whose preconditions cannot be supported in this scenario",
+                "a deterministic feasible landmark order selects one unresolved literal per FIFO expansion while retaining every reachable producer for that literal",
             ],
             "output_adaptations": [
-                "official Selector/Sequence/Condition/Action policy structure is serialized as common BT JSON",
+                "the complete official-style backup policy remains in native_forest.json",
+                "the solved native witness is projected to per-robot common BT JSON for deterministic execution",
                 "capability-required exclusive resources are exposed as AcquireResource/ReleaseResource leaves",
-                "a ReactiveSequence retick wrapper and bounded team-goal waits bridge common root-completion semantics",
-                "native premise conditions remain actual-state guards rather than speculative belief-success checks",
+                "cross-robot witness dependencies become bounded WaitFor leaves",
             ],
             "semantic_task_action_rewrites": [],
             "validator_feedback_to_planner": False,
@@ -268,7 +270,7 @@ def _write_native_artifacts(
             "algorithm": "FIFO MRBTP without optional LLM composite actions",
         },
     )
-    grounded = ground_action_templates(scenario)
+    grounded = reachable_action_templates(scenario)
     save_json(
         paths["actions"],
         {

@@ -23,6 +23,7 @@ from llm_mr_bt_planner.comparison.llm_hbt_native import (
     parse_initialization_response,
 )
 from llm_mr_bt_planner.comparison.llm_hbt_prompts import (
+    ALEX_SYSTEM_PROMPT,
     build_assignment_prompt,
     build_initialization_prompt,
 )
@@ -252,6 +253,12 @@ def test_nominal_prompts_are_fault_blind_and_recovery_prompt_exposes_snapshot():
         observed_state=set(nominal.initial_state),
         failure_observation=None,
     )
+    assert 'requesting robot is "unassigned initial condition"' in ALEX_SYSTEM_PROMPT
+    assert "add effects directly contain" in ALEX_SYSTEM_PROMPT
+    assert "Required final conditions:" in initialization
+    assert "installed_component(target_fixture)" in initialization
+    assert "Grounded robot actions" in initialization
+    assert "delete=" in initialization
     assert "source_floor" not in initialization + assignment
     assert "recover_fallen_part" not in initialization + assignment
 

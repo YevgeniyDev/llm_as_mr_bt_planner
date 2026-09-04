@@ -6,6 +6,7 @@ import json
 import queue
 import threading
 import time
+import warnings
 from typing import Any, NoReturn
 
 from .config import PROJECT_ROOT
@@ -408,11 +409,18 @@ def build_app(
 
     gradio_major = int(gr.__version__.split(".", 1)[0])
     blocks_options = {"css": APP_CSS} if gradio_major < 6 else {}
-    with gr.Blocks(
-        title="Multi-Robot Behavior Tree Planner",
-        fill_width=True,
-        **blocks_options,
-    ) as app:
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            message="The 'css' parameter in the Blocks constructor will be removed",
+            category=DeprecationWarning,
+        )
+        blocks = gr.Blocks(
+            title="Multi-Robot Behavior Tree Planner",
+            fill_width=True,
+            **blocks_options,
+        )
+    with blocks as app:
         gr.Markdown(
             "# Multi-Robot BT Planner\n"
             "Ask an LLM to construct complete multi-robot Behavior Trees, then validate and simulate them unchanged.",
@@ -498,6 +506,7 @@ def build_app(
         gr.Markdown("## 4. Inspect the result")
         with gr.Tabs():
             with gr.Tab("Live log"):
+                live_log_options = {"buttons": ["copy"]} if gradio_major >= 6 else {}
                 live_log = gr.Textbox(
                     value="Ready. Pipeline events will appear here in real time.",
                     label="Live pipeline log",
@@ -505,7 +514,7 @@ def build_app(
                     max_lines=30,
                     interactive=False,
                     autoscroll=True,
-                    buttons=["copy"],
+                    **live_log_options,
                 )
             with gr.Tab("Validation"):
                 validation_output = gr.JSON(label="Static validation")
