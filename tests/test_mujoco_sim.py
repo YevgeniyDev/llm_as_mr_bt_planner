@@ -653,6 +653,11 @@ def test_fallen_part_recovery_continues_without_reset(
     ]
     assert adaptive["continuity"]["state_hash_unchanged_while_replanning"] is True
     assert adaptive["continuity"]["no_reset_through_completion"] is True
+    assert adaptive["revision_commit"]["source_revision"] == 0
+    assert adaptive["revision_commit"]["committed_revision"] == 1
+    assert adaptive["revision_commit"]["state_match"] is True
+    assert adaptive["revision_commit"]["candidate_match"] is True
+    assert adaptive["revision_commit"]["commit_accepted"] is True
     assert set(adaptive["failure_snapshot"]["object_positions_m"]) == {"primary_part"}
     recovery_success = next(
         event
