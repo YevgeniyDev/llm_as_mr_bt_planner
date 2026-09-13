@@ -30,6 +30,13 @@ def test_valid_continuation_commits_and_advances_revision():
     context = coordinator.snapshot("state-a")
     certificate = coordinator.certify(context, candidate_hash)
 
+    coordinator.check(
+        certificate,
+        current_state_sha256="state-a",
+        candidate_sha256=candidate_hash,
+    )
+    assert coordinator.revision == 0
+
     committed_revision = coordinator.commit(
         certificate,
         current_state_sha256="state-a",

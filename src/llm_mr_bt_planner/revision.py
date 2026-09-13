@@ -65,7 +65,24 @@ class RevisionCoordinator:
         current_state_sha256: str,
         candidate_sha256: str,
     ) -> int:
-        """Authorize an exact candidate only while its source context is current."""
+        """Authorize an exact candidate and advance the installed revision."""
+
+        self.check(
+            certificate,
+            current_state_sha256=current_state_sha256,
+            candidate_sha256=candidate_sha256,
+        )
+        self.revision += 1
+        return self.revision
+
+    def check(
+        self,
+        certificate: RevisionCertificate,
+        *,
+        current_state_sha256: str,
+        candidate_sha256: str,
+    ) -> None:
+        """Check a certificate without changing the installed revision."""
 
         if certificate.mission_id != self.mission_id:
             raise StaleRevisionError("mission changed")
@@ -75,9 +92,6 @@ class RevisionCoordinator:
             raise StaleRevisionError("execution state changed")
         if certificate.candidate_sha256 != candidate_sha256:
             raise StaleRevisionError("candidate changed after verification")
-
-        self.revision += 1
-        return self.revision
 
 
 def canonical_plan_sha256(plan: Plan) -> str:

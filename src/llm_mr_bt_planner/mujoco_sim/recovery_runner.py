@@ -117,11 +117,9 @@ def run_recovery_cli(args: Namespace) -> int:
         context = coordinator.snapshot(state_sha256=_state_hash(executor.world))
         revision_context = asdict(context)
         save_json(output_dir / "revision_context.json", revision_context)
-        failure_snapshot = _world_snapshot(executor, measured_facts, observation)
-        failure_snapshot["revision_context"] = revision_context
         save_json(
             output_dir / "adaptive_failure_snapshot.json",
-            failure_snapshot,
+            _world_snapshot(executor, measured_facts, observation),
         )
         print(
             f"Requesting a complete continuation BT from {client.provider}/{client.model}; "
@@ -158,32 +156,31 @@ def run_recovery_cli(args: Namespace) -> int:
         certificate = coordinator.certify(context, candidate_hash)
         save_json(output_dir / "revision_certificate.json", asdict(certificate))
 
-        commit_state_hash = _state_hash(executor.world)
-        commit_candidate_hash = canonical_plan_sha256(planning.plan)
+        preinstall_state_hash = _state_hash(executor.world)
+        preinstall_candidate_hash = canonical_plan_sha256(planning.plan)
         revision_commit = {
             "mission_id": certificate.mission_id,
             "source_revision": certificate.source_revision,
             "committed_revision": None,
             "source_state_sha256": certificate.source_state_sha256,
-            "commit_state_sha256": commit_state_hash,
+            "commit_state_sha256": preinstall_state_hash,
             "candidate_sha256": certificate.candidate_sha256,
-            "state_match": certificate.source_state_sha256 == commit_state_hash,
-            "candidate_match": certificate.candidate_sha256 == commit_candidate_hash,
+            "state_match": certificate.source_state_sha256 == preinstall_state_hash,
+            "candidate_match": certificate.candidate_sha256 == preinstall_candidate_hash,
             "commit_accepted": False,
         }
         try:
-            new_revision = coordinator.commit(
+            coordinator.check(
                 certificate,
-                current_state_sha256=commit_state_hash,
-                candidate_sha256=commit_candidate_hash,
+                current_state_sha256=preinstall_state_hash,
+                candidate_sha256=preinstall_candidate_hash,
             )
-        except StaleRevisionError:
+        except StaleRevisionError as error:
+            revision_commit["rejection_reason"] = str(error)
             save_json(output_dir / "revision_commit.json", revision_commit)
             raise
-        revision_commit["committed_revision"] = new_revision
-        revision_commit["commit_accepted"] = True
 
-        # Construction makes the candidate executable, so it must follow commit.
+        # Prepare the executor without changing the installed revision.
         recovery_executor = PhysicalExecutor(
             executor.world,
             planning.runtime_scenario,
@@ -192,13 +189,36 @@ def run_recovery_cli(args: Namespace) -> int:
             executor.gait,
             progress=print,
         )
-        save_json(output_dir / "revision_commit.json", revision_commit)
         invariant_after = _continuity_invariant(executor.world)
         unchanged = invariant_before == invariant_after
         if not unchanged:
+            revision_commit["commit_state_sha256"] = invariant_after["state_sha256"]
+            revision_commit["state_match"] = False
+            revision_commit["rejection_reason"] = "executor construction changed simulation state"
+            save_json(output_dir / "revision_commit.json", revision_commit)
             raise RuntimeError(
                 "Constructing the adapted executor changed MuJoCo state; same-simulation invariant failed."
             )
+
+        # This final state-bound commit is the last operation before the caller may dispatch.
+        commit_state_hash = _state_hash(executor.world)
+        commit_candidate_hash = canonical_plan_sha256(planning.plan)
+        revision_commit["commit_state_sha256"] = commit_state_hash
+        revision_commit["state_match"] = certificate.source_state_sha256 == commit_state_hash
+        revision_commit["candidate_match"] = certificate.candidate_sha256 == commit_candidate_hash
+        try:
+            new_revision = coordinator.commit(
+                certificate,
+                current_state_sha256=commit_state_hash,
+                candidate_sha256=commit_candidate_hash,
+            )
+        except StaleRevisionError as error:
+            revision_commit["rejection_reason"] = str(error)
+            save_json(output_dir / "revision_commit.json", revision_commit)
+            raise
+        revision_commit["committed_revision"] = new_revision
+        revision_commit["commit_accepted"] = True
+        save_json(output_dir / "revision_commit.json", revision_commit)
         return recovery_executor, {
             "same_model_and_data": True,
             "no_reset_during_adaptation": True,
