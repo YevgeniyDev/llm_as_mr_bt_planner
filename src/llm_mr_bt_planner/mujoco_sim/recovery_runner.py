@@ -8,6 +8,7 @@ import subprocess
 import sys
 import time
 from argparse import Namespace
+from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
@@ -28,6 +29,7 @@ from ..recovery import (
     plan_diff,
     plan_recovery,
 )
+from ..revision import RevisionCoordinator, StaleRevisionError, canonical_plan_sha256
 from ..validation import validate_plan
 from .assets import MENAGERIE_COMMIT, ensure_assets
 from .camera_director import camera_director_for_task
@@ -104,6 +106,7 @@ def run_recovery_cli(args: Namespace) -> int:
         )
     )
     planning_holder: dict[str, RecoveryPlanningResult] = {}
+    coordinator = RevisionCoordinator(nominal_plan.mission_id)
 
     def adapt(
         executor: PhysicalExecutor,
@@ -111,6 +114,9 @@ def run_recovery_cli(args: Namespace) -> int:
         observation: dict[str, Any],
         invariant_before: dict[str, Any],
     ) -> tuple[PhysicalExecutor, dict[str, Any]]:
+        context = coordinator.snapshot(state_sha256=_state_hash(executor.world))
+        revision_context = asdict(context)
+        save_json(output_dir / "revision_context.json", revision_context)
         save_json(
             output_dir / "adaptive_failure_snapshot.json",
             _world_snapshot(executor, measured_facts, observation),
@@ -146,6 +152,35 @@ def run_recovery_cli(args: Namespace) -> int:
         )
         save_text(output_dir / "behavior_tree_adaptation.diff", plan_diff(nominal_plan, planning.plan))
 
+        candidate_hash = canonical_plan_sha256(planning.plan)
+        certificate = coordinator.certify(context, candidate_hash)
+        save_json(output_dir / "revision_certificate.json", asdict(certificate))
+
+        preinstall_state_hash = _state_hash(executor.world)
+        preinstall_candidate_hash = canonical_plan_sha256(planning.plan)
+        revision_commit = {
+            "mission_id": certificate.mission_id,
+            "source_revision": certificate.source_revision,
+            "committed_revision": None,
+            "source_state_sha256": certificate.source_state_sha256,
+            "commit_state_sha256": preinstall_state_hash,
+            "candidate_sha256": certificate.candidate_sha256,
+            "state_match": certificate.source_state_sha256 == preinstall_state_hash,
+            "candidate_match": certificate.candidate_sha256 == preinstall_candidate_hash,
+            "commit_accepted": False,
+        }
+        try:
+            coordinator.check(
+                certificate,
+                current_state_sha256=preinstall_state_hash,
+                candidate_sha256=preinstall_candidate_hash,
+            )
+        except StaleRevisionError as error:
+            revision_commit["rejection_reason"] = str(error)
+            save_json(output_dir / "revision_commit.json", revision_commit)
+            raise
+
+        # Prepare the executor without changing the installed revision.
         recovery_executor = PhysicalExecutor(
             executor.world,
             planning.runtime_scenario,
@@ -157,9 +192,33 @@ def run_recovery_cli(args: Namespace) -> int:
         invariant_after = _continuity_invariant(executor.world)
         unchanged = invariant_before == invariant_after
         if not unchanged:
+            revision_commit["commit_state_sha256"] = invariant_after["state_sha256"]
+            revision_commit["state_match"] = False
+            revision_commit["rejection_reason"] = "executor construction changed simulation state"
+            save_json(output_dir / "revision_commit.json", revision_commit)
             raise RuntimeError(
                 "Constructing the adapted executor changed MuJoCo state; same-simulation invariant failed."
             )
+
+        # This final state-bound commit is the last operation before the caller may dispatch.
+        commit_state_hash = _state_hash(executor.world)
+        commit_candidate_hash = canonical_plan_sha256(planning.plan)
+        revision_commit["commit_state_sha256"] = commit_state_hash
+        revision_commit["state_match"] = certificate.source_state_sha256 == commit_state_hash
+        revision_commit["candidate_match"] = certificate.candidate_sha256 == commit_candidate_hash
+        try:
+            new_revision = coordinator.commit(
+                certificate,
+                current_state_sha256=commit_state_hash,
+                candidate_sha256=commit_candidate_hash,
+            )
+        except StaleRevisionError as error:
+            revision_commit["rejection_reason"] = str(error)
+            save_json(output_dir / "revision_commit.json", revision_commit)
+            raise
+        revision_commit["committed_revision"] = new_revision
+        revision_commit["commit_accepted"] = True
+        save_json(output_dir / "revision_commit.json", revision_commit)
         return recovery_executor, {
             "same_model_and_data": True,
             "no_reset_during_adaptation": True,
@@ -168,6 +227,7 @@ def run_recovery_cli(args: Namespace) -> int:
             "after": invariant_after,
             "replanning_wall_seconds": round(planning_wall_seconds, 4),
             "recovery_provider": planning.provider,
+            "revision_commit": revision_commit,
         }
 
     print("Running adaptive trial with the identical fault trigger and no post-failure reset.")
@@ -271,6 +331,7 @@ def run_recovery_cli(args: Namespace) -> int:
             "recovered": adaptive["physical_execution"]["success"],
             "continuity": adaptive["continuity"],
         },
+        "revision_commit": adaptive["revision_commit"],
         "comparison_video": comparison,
         "software": {
             "python": sys.version,
@@ -453,6 +514,7 @@ def _run_fault_trial(
                     "failure_observation": observation,
                     "failure_snapshot": snapshot,
                     "continuity": continuity,
+                    "revision_commit": continuity["revision_commit"],
                     "combined_events": [*executor.events, *recovery_executor.events],
                 }
             recovery_executor.step(float(world.model.opt.timestep))
@@ -471,6 +533,7 @@ def _run_fault_trial(
             "failure_observation": observation,
             "failure_snapshot": snapshot,
             "continuity": continuity,
+            "revision_commit": continuity["revision_commit"],
             "combined_events": [*executor.events, *recovery_executor.events],
         }
 
